@@ -343,15 +343,32 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
             members.append(m); dists.append(d)
         except FileNotFoundError:
             continue  # skip missing experts
-    # Softmax weights based on PCA distance (closer = higher weight)
-    if len(dists) > 1:
-        d_arr = np.asarray(dists, dtype=np.float64)
+    ctx = make_context(xs, ys, W, H, y_obs, device, dtype)
+    # Softmax weights — two modes (Option E):
+    #   pca   : legacy. weight ∝ exp(-pca_dist/τ); pca_dist measures
+    #           y_obs shape similarity to sub centroid in the bin's PCA space.
+    #   gp_fit: weight ∝ exp(-||GP_i(z_nn_i) - y_obs||/τ); fit_dist measures
+    #           how close the sub's GP, evaluated at its training point
+    #           nearest to y_obs, actually predicts y_obs. This is a direct
+    #           y-space goodness measure that survives across bins (PCA
+    #           distance is per-bin and not strictly comparable).
+    weight_mode = str(getattr(args, "shape_weight_mode", "pca"))
+    if len(members) > 1:
+        if weight_mode == "gp_fit":
+            fit_dists = []
+            for m in members:
+                y_pred, _ = _predict_one(m.z_nn, m, ctx)
+                fit_dists.append(float(np.linalg.norm(y_pred - y_obs)))
+            d_arr = np.asarray(fit_dists, dtype=np.float64)
+        elif weight_mode == "pca":
+            d_arr = np.asarray(dists, dtype=np.float64)
+        else:
+            raise ValueError(f"unknown --shape-weight-mode={weight_mode}")
         tau = float(getattr(args, "shape_topk_softmax_tau", 1.5))
         ws = np.exp(-(d_arr - d_arr.min()) / max(tau, 1e-3))
         ws = ws / ws.sum()
     else:
         ws = np.array([1.0])
-    ctx = make_context(xs, ys, W, H, y_obs, device, dtype)
     return {
         "setup": setup_name, "W": W, "H": H, "y_obs": y_obs,
         "gid": gid, "state_dir": sd,
@@ -734,3 +751,13 @@ def add_argparse_args(ap) -> None:
     ap.add_argument("--shape-l2-eps-cm", type=float, default=0.5,
                     help="Fix A: distance (cm) from y_obs[7] to a bin edge "
                          "below which the neighbour bin is also pulled in.")
+    ap.add_argument("--shape-weight-mode", type=str, default="pca",
+                    choices=["pca", "gp_fit"],
+                    help="Option E: how to weight ensemble members. "
+                         "'pca' = legacy softmax on PCA distance to sub "
+                         "centroid in y-shape space; "
+                         "'gp_fit' = softmax on ||GP(z_nn) - y_obs|| in "
+                         "raw y-space — directly punishes subs whose GP "
+                         "cannot predict y_obs even at its own nearest "
+                         "training θ. Cross-bin comparable (unlike PCA "
+                         "distance). Adds K cheap GP evals at routing time.")
