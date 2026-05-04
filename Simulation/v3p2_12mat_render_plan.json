@@ -1,0 +1,227 @@
+[
+  {
+    "setup_name": "ref_Carbonara_2.0_2.5_2",
+    "ref": "data\\real_world_experiments\\ref_Carbonara_2.0_2.5_2",
+    "material": "Carbonara",
+    "n": 0.9215647847904366,
+    "eta": 76.02321880710623,
+    "sy": 115.31566762765829,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Carbonara_2.0_2.5_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Carbonara_3.7_6.4_1",
+    "ref": "data\\real_world_experiments\\ref_Carbonara_3.7_6.4_1",
+    "material": "Carbonara",
+    "n": 0.9215647847904366,
+    "eta": 76.02321880710623,
+    "sy": 115.31566762765829,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Carbonara_3.7_6.4_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Carbonara_3.7_6.4_1.zip",
+    "ref": "data\\real_world_experiments\\ref_Carbonara_3.7_6.4_1.zip",
+    "material": "Carbonara",
+    "n": 0.9215647847904366,
+    "eta": 76.02321880710623,
+    "sy": 115.31566762765829,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Carbonara_3.7_6.4_1.zip_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Cobb_2.0_2.9_2",
+    "ref": "data\\real_world_experiments\\ref_Cobb_2.0_2.9_2",
+    "material": "Cobb",
+    "n": 0.5129988613640978,
+    "eta": 54.09781345189311,
+    "sy": 5.00873568737856,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Cobb_2.0_2.9_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Cobb_4.7_5.5_1",
+    "ref": "data\\real_world_experiments\\ref_Cobb_4.7_5.5_1",
+    "material": "Cobb",
+    "n": 0.5129988613640978,
+    "eta": 54.09781345189311,
+    "sy": 5.00873568737856,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Cobb_4.7_5.5_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Congee_2.0_2.1_2",
+    "ref": "data\\real_world_experiments\\ref_Congee_2.0_2.1_2",
+    "material": "Congee",
+    "n": 0.6421926730332421,
+    "eta": 146.17114940371914,
+    "sy": 392.0369377422383,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Congee_2.0_2.1_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Congee_5.7_6.4_1",
+    "ref": "data\\real_world_experiments\\ref_Congee_5.7_6.4_1",
+    "material": "Congee",
+    "n": 0.6421926730332421,
+    "eta": 146.17114940371914,
+    "sy": 392.0369377422383,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Congee_5.7_6.4_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Island_2.0_2.9_2",
+    "ref": "data\\real_world_experiments\\ref_Island_2.0_2.9_2",
+    "material": "Island",
+    "n": 0.5141752196315607,
+    "eta": 58.17522187866835,
+    "sy": 81.71193998853413,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Island_2.0_2.9_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Island_3.6_3.3_1",
+    "ref": "data\\real_world_experiments\\ref_Island_3.6_3.3_1",
+    "material": "Island",
+    "n": 0.5141752196315607,
+    "eta": 58.17522187866835,
+    "sy": 81.71193998853413,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Island_3.6_3.3_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_JapaneseCabbagePancakeSauce_2.0_2.9_2",
+    "ref": "data\\real_world_experiments\\ref_JapaneseCabbagePancakeSauce_2.0_2.9_2",
+    "material": "JapaneseCabbagePancakeSauce",
+    "n": 0.5693863317443966,
+    "eta": 52.19244017835445,
+    "sy": 101.0201971774615,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_JapaneseCabbagePancakeSauce_2.0_2.9_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_JapaneseCabbagePancakeSauce_3.8_4.2_1",
+    "ref": "data\\real_world_experiments\\ref_JapaneseCabbagePancakeSauce_3.8_4.2_1",
+    "material": "JapaneseCabbagePancakeSauce",
+    "n": 0.5693863317443966,
+    "eta": 52.19244017835445,
+    "sy": 101.0201971774615,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_JapaneseCabbagePancakeSauce_3.8_4.2_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_JapaneseThickenedWorcestershireSauce_2.0_3.0_2",
+    "ref": "data\\real_world_experiments\\ref_JapaneseThickenedWorcestershireSauce_2.0_3.0_2",
+    "material": "JapaneseThickenedWorcestershireSauce",
+    "n": 0.4496996800810656,
+    "eta": 20.793327666661195,
+    "sy": 5.002934273604297,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_JapaneseThickenedWorcestershireSauce_2.0_3.0_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_JapaneseThickenedWorcestershireSauce_4.0_2.1_1",
+    "ref": "data\\real_world_experiments\\ref_JapaneseThickenedWorcestershireSauce_4.0_2.1_1",
+    "material": "JapaneseThickenedWorcestershireSauce",
+    "n": 0.4496996800810656,
+    "eta": 20.793327666661195,
+    "sy": 5.002934273604297,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_JapaneseThickenedWorcestershireSauce_4.0_2.1_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Lotion_2.5_5.1_1",
+    "ref": "data\\real_world_experiments\\ref_Lotion_2.5_5.1_1",
+    "material": "Lotion",
+    "n": 0.8262013040525454,
+    "eta": 16.221820442641814,
+    "sy": 188.47477004709367,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Lotion_2.5_5.1_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Lotion_7.0_7.0_2",
+    "ref": "data\\real_world_experiments\\ref_Lotion_7.0_7.0_2",
+    "material": "Lotion",
+    "n": 0.8262013040525454,
+    "eta": 16.221820442641814,
+    "sy": 188.47477004709367,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Lotion_7.0_7.0_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_MoisturizingMilk_2.0_3.2_2",
+    "ref": "data\\real_world_experiments\\ref_MoisturizingMilk_2.0_3.2_2",
+    "material": "MoisturizingMilk",
+    "n": 0.748669548139201,
+    "eta": 33.96645112845897,
+    "sy": 62.45906144572276,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_MoisturizingMilk_2.0_3.2_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_MoisturizingMilk_5.9_2.9_1",
+    "ref": "data\\real_world_experiments\\ref_MoisturizingMilk_5.9_2.9_1",
+    "material": "MoisturizingMilk",
+    "n": 0.748669548139201,
+    "eta": 33.96645112845897,
+    "sy": 62.45906144572276,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_MoisturizingMilk_5.9_2.9_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Mustard_2.0_2.3_2",
+    "ref": "data\\real_world_experiments\\ref_Mustard_2.0_2.3_2",
+    "material": "Mustard",
+    "n": 0.4201001092071273,
+    "eta": 190.7698273484533,
+    "sy": 224.1507408506893,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Mustard_2.0_2.3_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Mustard_6.6_3.3_1",
+    "ref": "data\\real_world_experiments\\ref_Mustard_6.6_3.3_1",
+    "material": "Mustard",
+    "n": 0.4201001092071273,
+    "eta": 190.7698273484533,
+    "sy": 224.1507408506893,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Mustard_6.6_3.3_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Pomodoro_2.1_3.2_1",
+    "ref": "data\\real_world_experiments\\ref_Pomodoro_2.1_3.2_1",
+    "material": "Pomodoro",
+    "n": 0.5283946564013781,
+    "eta": 38.98871289761786,
+    "sy": 170.19802622457004,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Pomodoro_2.1_3.2_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Pomodoro_7.0_7.0_2",
+    "ref": "data\\real_world_experiments\\ref_Pomodoro_7.0_7.0_2",
+    "material": "Pomodoro",
+    "n": 0.5283946564013781,
+    "eta": 38.98871289761786,
+    "sy": 170.19802622457004,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Pomodoro_7.0_7.0_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Sesame_2.0_2.9_2",
+    "ref": "data\\real_world_experiments\\ref_Sesame_2.0_2.9_2",
+    "material": "Sesame",
+    "n": 0.9999721403011054,
+    "eta": 4.484400809131428,
+    "sy": 17.777599259243832,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Sesame_2.0_2.9_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_Sesame_4.2_4.0_1",
+    "ref": "data\\real_world_experiments\\ref_Sesame_4.2_4.0_1",
+    "material": "Sesame",
+    "n": 0.9999721403011054,
+    "eta": 4.484400809131428,
+    "sy": 17.777599259243832,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_Sesame_4.2_4.0_1_theta_dbl"
+  },
+  {
+    "setup_name": "ref_SweetBeanPaste_2.0_2.1_2",
+    "ref": "data\\real_world_experiments\\ref_SweetBeanPaste_2.0_2.1_2",
+    "material": "SweetBeanPaste",
+    "n": 0.9954805974672783,
+    "eta": 84.62333148678063,
+    "sy": 201.64908291714437,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_SweetBeanPaste_2.0_2.1_2_theta_dbl"
+  },
+  {
+    "setup_name": "ref_SweetBeanPaste_4.1_4.8_1",
+    "ref": "data\\real_world_experiments\\ref_SweetBeanPaste_4.1_4.8_1",
+    "material": "SweetBeanPaste",
+    "n": 0.9954805974672783,
+    "eta": 84.62333148678063,
+    "sy": 201.64908291714437,
+    "out_dir": "Simulation/results/v3p2_12mat/ref_SweetBeanPaste_4.1_4.8_1_theta_dbl"
+  }
+]

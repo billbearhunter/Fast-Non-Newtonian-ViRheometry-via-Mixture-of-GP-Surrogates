@@ -1,0 +1,33 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\MarchingCubes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\CompileDefinitions.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\MarchingCubes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\LookUpTable.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{61C1E38B-9BC9-3E56-A490-A186DFB1AAC6}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{9647E422-8F2F-3BF3-94CA-4070E469856C}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

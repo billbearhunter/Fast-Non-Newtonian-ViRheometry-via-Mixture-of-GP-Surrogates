@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\ParticleSkinner3DTaichi\cpp_marching_cubes\build_win\CMakeFiles\07e2217d272c34328a8b14b3d23b593f\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{D4381FB3-6BCC-3785-87E2-3D36AC1D719E}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

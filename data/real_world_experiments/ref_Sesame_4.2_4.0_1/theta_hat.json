@@ -1,0 +1,22 @@
+{
+  "material": "Sesame",
+  "setup_1": {
+    "H": 4.2,
+    "W": 4.0,
+    "name": "ref_Sesame_4.2_4.0_1"
+  },
+  "theta_hat": {
+    "n": 0.7850154803664544,
+    "eta": 12.718943330964045,
+    "sigma_y": 34.01950101268512
+  },
+  "objective": 0.00041097949552682304,
+  "opt_s": 5.408489227294922,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 3.0,
+    "name": "ref_Sesame_2.0_3.0_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\real_world_experiments\\ref_Sesame_2.0_3.0_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\real_world_experiments\\ref_Sesame_2.0_3.0_2\\settings.xml"
+  }
+}

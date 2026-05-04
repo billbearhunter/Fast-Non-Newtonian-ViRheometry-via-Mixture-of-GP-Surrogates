@@ -1,0 +1,10 @@
+{
+  "root": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\real_world_experiments",
+  "state_root": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\Models\\v10_yshape_v3p2_round2partial",
+  "n_materials": 12,
+  "n_single": 0,
+  "n_double": 12,
+  "n_skipped": 0,
+  "single_mean_s": null,
+  "double_mean_s": 12.742329776287079
+}

@@ -1,0 +1,104 @@
+{
+  "dir": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Mustard_2.0_2.3_2",
+  "camera_xml": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Mustard_2.0_2.3_2\\camera_params.xml",
+  "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Mustard_2.0_2.3_2\\settings.xml",
+  "images": [
+    "config_01.png",
+    "config_02.png",
+    "config_03.png",
+    "config_04.png",
+    "config_05.png",
+    "config_06.png",
+    "config_07.png",
+    "config_08.png"
+  ],
+  "flow_direction_xz": [
+    1.0,
+    0.0
+  ],
+  "box_front_cm": 2.3,
+  "distances": [
+    0.025501357254421875,
+    0.28243044132421485,
+    0.3659983099276266,
+    0.4366847221022832,
+    0.49425576375826186,
+    0.5385645481153674,
+    0.5826794686963135,
+    0.6178303072832458
+  ],
+  "rows": [
+    {
+      "frame_index": 1,
+      "image": "config_01.png",
+      "distance_cm": 0.025501357254421875,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.3255013572544216,
+      "far_x_cm": 2.3255013572544216,
+      "far_z_cm": 1.595453356870391
+    },
+    {
+      "frame_index": 2,
+      "image": "config_02.png",
+      "distance_cm": 0.28243044132421485,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.582430441324215,
+      "far_x_cm": 2.582430441324215,
+      "far_z_cm": 1.1537267593432876
+    },
+    {
+      "frame_index": 3,
+      "image": "config_03.png",
+      "distance_cm": 0.3659983099276266,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.6659983099276268,
+      "far_x_cm": 2.6659983099276268,
+      "far_z_cm": 1.1158459816144939
+    },
+    {
+      "frame_index": 4,
+      "image": "config_04.png",
+      "distance_cm": 0.4366847221022832,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.736684722102283,
+      "far_x_cm": 2.736684722102283,
+      "far_z_cm": 1.1152265702233155
+    },
+    {
+      "frame_index": 5,
+      "image": "config_05.png",
+      "distance_cm": 0.49425576375826186,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.7942557637582617,
+      "far_x_cm": 2.7942557637582617,
+      "far_z_cm": 1.1518712987082735
+    },
+    {
+      "frame_index": 6,
+      "image": "config_06.png",
+      "distance_cm": 0.5385645481153674,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.838564548115367,
+      "far_x_cm": 2.838564548115367,
+      "far_z_cm": 1.2255371118153169
+    },
+    {
+      "frame_index": 7,
+      "image": "config_07.png",
+      "distance_cm": 0.5826794686963135,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.8826794686963133,
+      "far_x_cm": 2.8826794686963133,
+      "far_z_cm": 1.2988806156351673
+    },
+    {
+      "frame_index": 8,
+      "image": "config_08.png",
+      "distance_cm": 0.6178303072832458,
+      "origin_projection_cm": 2.3,
+      "far_projection_cm": 2.917830307283246,
+      "far_x_cm": 2.917830307283246,
+      "far_z_cm": 1.2985731935280576
+    }
+  ]
+}

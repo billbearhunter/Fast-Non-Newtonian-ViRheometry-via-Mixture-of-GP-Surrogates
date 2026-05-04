@@ -1,0 +1,10 @@
+^C:\USERS\XIONG\DOCUMENTS\GITHUB\NEW_VIRHEOMETRY\SIMULATION\GLRENDER3D\BUILD_WIN3\CMAKEFILES\9EA01559C9BFEC132BFC17CA2F540074\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d -BC:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build_win3 --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/GLRender3d/build_win3/GLRender3d.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

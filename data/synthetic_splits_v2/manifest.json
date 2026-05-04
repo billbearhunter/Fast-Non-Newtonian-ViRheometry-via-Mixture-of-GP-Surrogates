@@ -1,0 +1,27 @@
+{
+  "seed": 42,
+  "val_frac": 0.2,
+  "pool_total": 334536,
+  "n_train": 267629,
+  "n_val": 66907,
+  "n_orig_train": 281432,
+  "n_orig_val": 35179,
+  "n_infill": 17925,
+  "source_breakdown": {
+    "orig_train": 281432,
+    "orig_val": 35179,
+    "infill:_consumed_infill": 4801,
+    "infill:state_gid_15": 2376,
+    "infill:state_gid_6": 1805,
+    "infill:state_gid_5": 1501,
+    "infill:state_gid_0": 1450,
+    "infill:state_gid_11": 1376,
+    "infill:state_gid_17": 1244,
+    "infill:state_gid_9": 973,
+    "infill:state_gid_12": 791,
+    "infill:state_gid_2": 708,
+    "infill:state_gid_23": 428,
+    "infill:state_gid_3": 341,
+    "infill:state_gid_24": 131
+  }
+}

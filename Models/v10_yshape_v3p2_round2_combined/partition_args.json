@@ -1,0 +1,7 @@
+{
+  "k_len": 5,
+  "k_sh_max": 5,
+  "n_pc": 3,
+  "min_n_per_sub": 80,
+  "use_val": true
+}

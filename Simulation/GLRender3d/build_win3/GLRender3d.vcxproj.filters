@@ -1,0 +1,36 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <ClCompile Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\main.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\ObjGL.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\FluidMat.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\main.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\ObjGL.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\FluidMat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\xiong\Documents\GitHub\New_ViRheometry\Simulation\GLRender3d\CMakeLists.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="Header Files">
+      <UniqueIdentifier>{249426C1-EFB9-3EFD-A0B5-56EA88B9F542}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files">
+      <UniqueIdentifier>{F6E103A3-2BC4-3117-ADD9-FFA0EDF7D170}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

@@ -1,0 +1,2 @@
+mode,material,setup_A,setup_B,theta_n,theta_eta,theta_sy,objective,opt_s,sub_ids,basins,y8_A,y8_B,raw_wrms_total,sy_anchor,sy_single_a,sy_single_b,selector_mode
+double,Sesame,ref_Sesame_4.2_4.0_1,ref_Sesame_2.0_2.9_2,0.9999721403011054,4.484400809131428,17.777599259243832,0.007920588591770543,9.809631824493408,"[16, 18]","[3, 3]",7.046840357077391,4.784753079123746,0.24487541579556404,17.778685966199202,34.01950101268512,9.291190795740025,shape

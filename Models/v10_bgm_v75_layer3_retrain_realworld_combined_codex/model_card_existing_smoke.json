@@ -1,0 +1,51 @@
+{
+  "version": "v10_bgm_v75_layer3_retrain_all",
+  "families": [
+    "Chuno",
+    "Sweet",
+    "Tonkatsu"
+  ],
+  "basin_policy": "real-union",
+  "setups": {
+    "Tonkatsu_4.0_4.5_1": [
+      "Tonkatsu",
+      4.0,
+      4.5
+    ],
+    "Tonkatsu_2.1_6.5_1": [
+      "Tonkatsu",
+      6.5,
+      2.1
+    ],
+    "Chuno_4.5_4.5_1": [
+      "Chuno",
+      4.5,
+      4.5
+    ],
+    "Chuno_7.0_7.0_1": [
+      "Chuno",
+      7.0,
+      7.0
+    ],
+    "Sweet_2.5_2.5_1": [
+      "Sweet",
+      2.5,
+      2.5
+    ],
+    "Sweet_4.5_4.5_1": [
+      "Sweet",
+      4.5,
+      4.5
+    ]
+  },
+  "gids": [
+    0,
+    12,
+    20,
+    24
+  ],
+  "n_iter": 80,
+  "vbgmm_k_max": 8,
+  "min_basin_n": 30,
+  "out_root": "pipeline_v10\\Models\\v10_bgm_v75_layer3_retrain_smoke_real_union_codex"
+}

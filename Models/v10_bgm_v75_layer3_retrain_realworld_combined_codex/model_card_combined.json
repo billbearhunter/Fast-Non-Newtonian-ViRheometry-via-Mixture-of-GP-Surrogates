@@ -1,0 +1,44 @@
+{
+  "version": "v10_bgm_v75_layer3_retrain_realworld_combined",
+  "source": "smoke gid 0/12/20/24 copied + missing real-world gids trained all-active",
+  "gids": [
+    0,
+    2,
+    3,
+    5,
+    6,
+    9,
+    11,
+    12,
+    15,
+    17,
+    20,
+    21,
+    23,
+    24
+  ],
+  "existing_smoke_gids": [
+    0,
+    12,
+    20,
+    24
+  ],
+  "new_trained_gids": [
+    2,
+    3,
+    5,
+    6,
+    9,
+    11,
+    15,
+    17,
+    21,
+    23
+  ],
+  "n_subs_total": 623,
+  "n_subs_existing": 135,
+  "n_subs_new": 488,
+  "n_iter": 80,
+  "vbgmm_k_max": 8,
+  "min_basin_n": 30
+}

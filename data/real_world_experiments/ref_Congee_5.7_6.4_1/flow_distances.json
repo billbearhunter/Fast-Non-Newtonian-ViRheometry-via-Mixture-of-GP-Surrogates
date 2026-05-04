@@ -1,0 +1,104 @@
+{
+  "dir": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Congee_5.7_6.4_1",
+  "camera_xml": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Congee_5.7_6.4_1\\camera_params.xml",
+  "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\New_ViRheometry\\pipeline_v10\\data\\real_world_experiments\\ref_Congee_5.7_6.4_1\\settings.xml",
+  "images": [
+    "config_01.png",
+    "config_02.png",
+    "config_03.png",
+    "config_04.png",
+    "config_05.png",
+    "config_06.png",
+    "config_07.png",
+    "config_08.png"
+  ],
+  "flow_direction_xz": [
+    1.0,
+    0.0
+  ],
+  "box_front_cm": 6.4,
+  "distances": [
+    0.5060227605607135,
+    0.946012537028422,
+    1.3608404540210797,
+    1.7476393362964346,
+    2.1082609740334988,
+    2.4023340295679567,
+    2.66253886315941,
+    2.879444095707859
+  ],
+  "rows": [
+    {
+      "frame_index": 1,
+      "image": "config_01.png",
+      "distance_cm": 0.5060227605607135,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 6.906022760560713,
+      "far_x_cm": 6.906022760560713,
+      "far_z_cm": 1.2893085374505786
+    },
+    {
+      "frame_index": 2,
+      "image": "config_02.png",
+      "distance_cm": 0.946012537028422,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 7.346012537028422,
+      "far_x_cm": 7.346012537028422,
+      "far_z_cm": 1.5842332571080724
+    },
+    {
+      "frame_index": 3,
+      "image": "config_03.png",
+      "distance_cm": 1.3608404540210797,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 7.76084045402108,
+      "far_x_cm": 7.76084045402108,
+      "far_z_cm": -0.25386082073258764
+    },
+    {
+      "frame_index": 4,
+      "image": "config_04.png",
+      "distance_cm": 1.7476393362964346,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 8.147639336296434,
+      "far_x_cm": 8.147639336296434,
+      "far_z_cm": 0.14867561666844775
+    },
+    {
+      "frame_index": 5,
+      "image": "config_05.png",
+      "distance_cm": 2.1082609740334988,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 8.5082609740335,
+      "far_x_cm": 8.5082609740335,
+      "far_z_cm": -0.3718981618682171
+    },
+    {
+      "frame_index": 6,
+      "image": "config_06.png",
+      "distance_cm": 2.4023340295679567,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 8.802334029567957,
+      "far_x_cm": 8.802334029567957,
+      "far_z_cm": 0.11246973806168237
+    },
+    {
+      "frame_index": 7,
+      "image": "config_07.png",
+      "distance_cm": 2.66253886315941,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 9.06253886315941,
+      "far_x_cm": 9.06253886315941,
+      "far_z_cm": 0.38918261881544236
+    },
+    {
+      "frame_index": 8,
+      "image": "config_08.png",
+      "distance_cm": 2.879444095707859,
+      "origin_projection_cm": 6.4,
+      "far_projection_cm": 9.27944409570786,
+      "far_x_cm": 9.27944409570786,
+      "far_z_cm": 0.5456222588080983
+    }
+  ]
+}

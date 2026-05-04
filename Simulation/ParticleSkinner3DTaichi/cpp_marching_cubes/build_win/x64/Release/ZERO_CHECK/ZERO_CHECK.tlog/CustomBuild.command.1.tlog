@@ -1,0 +1,10 @@
+^C:\USERS\XIONG\DOCUMENTS\GITHUB\NEW_VIRHEOMETRY\SIMULATION\PARTICLESKINNER3DTAICHI\CPP_MARCHING_CUBES\BUILD_WIN\CMAKEFILES\07E2217D272C34328A8B14B3D23B593F\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes -BC:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/build_win --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/xiong/Documents/GitHub/New_ViRheometry/Simulation/ParticleSkinner3DTaichi/cpp_marching_cubes/build_win/cpp_marching_cubes.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
