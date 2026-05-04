@@ -67,7 +67,22 @@ def main():
                         help="Save fitted parameters to JSON file")
     args = parser.parse_args()
 
-    df = pd.read_table(args.file, header=5, encoding="UTF-16")
+    # Auto-detect header row (different export templates differ); same logic as flowcurve.py
+    df = None
+    for h in range(0, 12):
+        try:
+            cand = pd.read_table(args.file, header=h, encoding="UTF-16")
+            if '[1/s]' in cand.columns and '[Pa]' in cand.columns:
+                df = cand
+                break
+        except Exception:
+            continue
+    if df is None:
+        raise RuntimeError(f"Could not locate header row with '[1/s]' and '[Pa]' in {args.file}")
+    # Drop unit/comment rows that aren't numeric
+    df = df[pd.to_numeric(df['[1/s]'], errors='coerce').notna()].reset_index(drop=True)
+    df['[1/s]'] = df['[1/s]'].astype(float)
+    df['[Pa]'] = df['[Pa]'].astype(float)
     result = fit_hb(df['[1/s]'], df['[Pa]'], args.range[0], args.range[1])
 
     if args.out:

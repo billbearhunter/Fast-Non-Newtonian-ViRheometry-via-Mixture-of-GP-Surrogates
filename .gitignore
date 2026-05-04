@@ -20,3 +20,10 @@ env/
 *.swp
 .DS_Store
 Thumbs.db
+
+# MPM intermediate sim artifacts under snapdiff/result dirs
+# (particle state .dat and Wavefront .obj meshes; can be hundreds of MB per run)
+OptimizationResults/snapdiff_*/**/*.dat
+OptimizationResults/snapdiff_*/**/*.obj
+Simulation/results/**/*.dat
+Simulation/results/**/*.obj
