@@ -38,7 +38,7 @@ PARAM_BOUNDS = {
 
 
 SIM_VS_REAL_CSV = REPO / "tests" / "sim_vs_real_results" / "sim_vs_real.csv"
-DEFAULT_STATE_ROOT = PIPELINE_ROOT / "Models" / "v10_bgm_v75_layer3_retrain_realworld_combined_codex"
+DEFAULT_STATE_ROOT = PIPELINE_ROOT / "Models" / "v10_yshape_v3p2_round2partial"
 STATE_ROOT = Path(os.environ.get("V10_STATE_ROOT", DEFAULT_STATE_ROOT))
 V7_GEO_PARTITION = REPO / "Models" / "v7_bgm_refit_clean" / "partition_v7_bgm_refit.pkl"
 V6_MODEL = REPO / "Models" / "v6_1" / "model.pt"
