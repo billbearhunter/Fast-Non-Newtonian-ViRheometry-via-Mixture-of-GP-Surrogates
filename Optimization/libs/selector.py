@@ -47,6 +47,23 @@ FRAME_W_NP = np.array([0.2, 0.2, 0.35, 0.5, 0.8, 1.0, 1.4, 2.0], dtype=np.float6
 Z_SCALE_NP = np.array([0.20, 0.90, 1.20], dtype=np.float64)
 
 
+def _resolve_frame_w(args) -> np.ndarray:
+    """Return per-frame weights honoring --shape-frame-w override.
+
+    args.shape_frame_w (if set, list of 8 floats) replaces the default
+    [0.2, 0.2, 0.35, 0.5, 0.8, 1.0, 1.4, 2.0] for the loss frame
+    weighting.  Use it to e.g. zero out f1-f2 (surface-tension dominated
+    initial frames) and concentrate the fit on f3-f8.
+    """
+    fw = getattr(args, "shape_frame_w", None)
+    if fw is None:
+        return FRAME_W_NP
+    arr = np.asarray(fw, dtype=np.float64)
+    if arr.shape != (8,):
+        raise ValueError(f"--shape-frame-w must have 8 floats, got shape {arr.shape}")
+    return arr
+
+
 def relative_wrms(y_hat: np.ndarray, y_obs: np.ndarray) -> float:
     """Frame-weighted relative residual; matches engine.setup_loss linear."""
     err = (y_hat - y_obs) * FRAME_W_NP
@@ -374,6 +391,7 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
         "gid": gid, "state_dir": sd,
         "bin_id": int(members[0].bin_id), "sub_id": int(members[0].sub_id),
         "members": members, "member_weights": ws.tolist(), "ctx": ctx,
+        "frame_w": _resolve_frame_w(args),
     }
 
 
@@ -436,16 +454,17 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
             float(getattr(args, "shape_sy_prior_min_std", 0.4)),
         )
 
+    fw = item.get("frame_w", FRAME_W_NP)
     def loss(z):
         l_total = 0.0
         sup_total = 0.0
         for m, w in zip(members, weights):
             y_hat, _sig = _predict_one(z, m, ctx)
             if loss_mode == "log_nuisance":
-                lk = _setup_loss_log_nuisance_np(y_hat, item["y_obs"], FRAME_W_NP,
+                lk = _setup_loss_log_nuisance_np(y_hat, item["y_obs"], fw,
                                                   args.sigma_bias, args.sigma_trend)
             else:
-                lk = _setup_loss_linear_np(y_hat, item["y_obs"], FRAME_W_NP)
+                lk = _setup_loss_linear_np(y_hat, item["y_obs"], fw)
             l_total += float(w) * lk
             sup_total += float(w) * _support_penalty(z, m)
         prior = 0.0
@@ -587,26 +606,28 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
             log_sy_prior_std = max(float(getattr(args, "shape_sy_prior_min_std", 0.4)),
                                      0.5 * disagree)
 
+    fw_a = item_a.get("frame_w", FRAME_W_NP)
+    fw_b = item_b.get("frame_w", FRAME_W_NP)
     def loss(z):
         # Plan E: weighted consensus across top-K members for each setup
         l_a_total = sup_a_total = 0.0
         for m, w in zip(members_a, ws_a):
             y_a, _ = _predict_one(z, m, ctx_a)
             if loss_mode == "log_nuisance":
-                la = _setup_loss_log_nuisance_np(y_a, item_a["y_obs"], FRAME_W_NP,
+                la = _setup_loss_log_nuisance_np(y_a, item_a["y_obs"], fw_a,
                                                    args.sigma_bias, args.sigma_trend)
             else:
-                la = _setup_loss_linear_np(y_a, item_a["y_obs"], FRAME_W_NP)
+                la = _setup_loss_linear_np(y_a, item_a["y_obs"], fw_a)
             l_a_total += float(w) * la
             sup_a_total += float(w) * _support_penalty(z, m)
         l_b_total = sup_b_total = 0.0
         for m, w in zip(members_b, ws_b):
             y_b, _ = _predict_one(z, m, ctx_b)
             if loss_mode == "log_nuisance":
-                lb = _setup_loss_log_nuisance_np(y_b, item_b["y_obs"], FRAME_W_NP,
+                lb = _setup_loss_log_nuisance_np(y_b, item_b["y_obs"], fw_b,
                                                    args.sigma_bias, args.sigma_trend)
             else:
-                lb = _setup_loss_linear_np(y_b, item_b["y_obs"], FRAME_W_NP)
+                lb = _setup_loss_linear_np(y_b, item_b["y_obs"], fw_b)
             l_b_total += float(w) * lb
             sup_b_total += float(w) * _support_penalty(z, m)
         sup = 0.5 * (sup_a_total + sup_b_total)
@@ -761,3 +782,10 @@ def add_argparse_args(ap) -> None:
                          "cannot predict y_obs even at its own nearest "
                          "training θ. Cross-bin comparable (unlike PCA "
                          "distance). Adds K cheap GP evals at routing time.")
+    ap.add_argument("--shape-frame-w", type=float, nargs=8, default=None,
+                    metavar=("F1","F2","F3","F4","F5","F6","F7","F8"),
+                    help="Override per-frame loss weight (default "
+                         "[0.2,0.2,0.35,0.5,0.8,1.0,1.4,2.0]). Use to "
+                         "down-weight frames dominated by un-modeled "
+                         "physics (e.g. f1-f2 surface-tension initial "
+                         "yield). Pass exactly 8 floats.")
