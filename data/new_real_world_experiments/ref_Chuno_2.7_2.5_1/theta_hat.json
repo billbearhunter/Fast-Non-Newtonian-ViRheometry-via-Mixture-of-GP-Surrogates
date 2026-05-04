@@ -1,0 +1,22 @@
+{
+  "material": "Chuno",
+  "setup_1": {
+    "H": 2.7,
+    "W": 2.5,
+    "name": "ref_Chuno_2.7_2.5_1"
+  },
+  "theta_hat": {
+    "n": 0.6054912609578436,
+    "eta": 3.4408499389735727,
+    "sigma_y": 11.302688784936972
+  },
+  "objective": 0.0003428582861027478,
+  "opt_s": 7.057571649551392,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 4.0,
+    "name": "ref_Chuno_2.0_4.0_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Chuno_2.0_4.0_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Chuno_2.0_4.0_2\\settings.xml"
+  }
+}
