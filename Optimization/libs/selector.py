@@ -226,16 +226,46 @@ def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
 # Public entry points
 # ---------------------------------------------------------------------------
 
-def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int) -> list[tuple]:
-    """Return top-K (bin_id, sub_id, pca_dist) sorted by ascending PCA distance.
+def _pca_dist_in_bin(y_obs: np.ndarray, bin_obj: dict) -> tuple[np.ndarray, list[tuple]]:
+    """Project y_obs into a single bin's PCA space and compute per-sub distances.
 
-    Plan E: instead of top-1, return up to K candidate subs in the routed
-    length bin.  CMA loss can then form a weighted consensus across all K
-    GPs, automatically downweighting subs whose forward GP can't fit y_obs.
+    Returns (y_obs_pc, [(sub_id, pca_dist), ...]).
     """
     from surrogate.densify_yshape import norm_curve_one
+    nc = norm_curve_one(y_obs)
+    nc_s = (nc - bin_obj["scaler"]["mean"]) / bin_obj["scaler"]["std"]
+    pc = bin_obj["pca"]["components"] @ (nc_s - bin_obj["pca"]["mean"])
+    out = []
+    for s in bin_obj["subs"]:
+        c_pc = np.asarray(s["centroid_pc"], dtype=np.float64)
+        d = float(np.linalg.norm(c_pc - pc))
+        out.append((int(s["sub_id"]), d))
+    return pc, out
+
+
+def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int,
+                      mode: str = "hard", eps_cm: float = 0.0) -> list[tuple]:
+    """Return top-K (bin_id, sub_id, pca_dist) sorted by ascending PCA distance.
+
+    Plan E: instead of top-1, return up to K candidate subs.
+
+    L2-gate modes (selector argparse: --shape-l2-mode):
+      hard      — legacy: only subs in the bin that contains y_obs[7]
+      eps       — Fix A: also include neighbour bin subs when y_obs[7] is
+                  within `eps_cm` of an edge of the primary bin
+      cross_bin — C1: ignore L2; per-bin top-1 sub, ranked across bins
+      hybrid    — C3: primary bin full subs + every other bin's top-1
+
+    Note: PCA distances are NOT comparable across bins (each bin has its
+    own PCA basis & scaler). When mode != hard we still sort by raw PCA
+    dist as a coarse heuristic — CMA-ES + Plan E softmax then forms the
+    consensus, and the post-CMA-ES Plan-E rerank picks the winning sub by
+    GP fit at the converged z (so cross-bin incomparability is mostly
+    absorbed downstream).
+    """
     edges = state["length_edges"]
     y8 = float(y_obs[7])
+    # Primary bin via legacy hard lookup (always needed as anchor)
     bin_id = -1
     for b in state["bins"]:
         if b["y8_lo"] <= y8 < b["y8_hi"]:
@@ -243,17 +273,47 @@ def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int) -> list[tuple]:
     if bin_id < 0:
         bin_id = int(state["bins"][0]["bin_id"]) if y8 < edges[0] \
                   else int(state["bins"][-1]["bin_id"])
-    bin_obj = next(b for b in state["bins"] if b["bin_id"] == bin_id)
-    nc = norm_curve_one(y_obs)
-    nc_s = (nc - bin_obj["scaler"]["mean"]) / bin_obj["scaler"]["std"]
-    pc = bin_obj["pca"]["components"] @ (nc_s - bin_obj["pca"]["mean"])
-    # distance to each existing sub centroid (post-merge)
-    cands = []
-    for s in bin_obj["subs"]:
-        c_pc = np.asarray(s["centroid_pc"], dtype=np.float64)
-        d = float(np.linalg.norm(c_pc - pc))
-        cands.append((bin_id, int(s["sub_id"]), d))
-    cands.sort(key=lambda x: x[2])
+
+    # Decide which bins to draw candidates from
+    all_bins = list(state["bins"])
+    bin_by_id = {int(b["bin_id"]): b for b in all_bins}
+    if mode == "hard":
+        cand_bin_ids = [bin_id]
+    elif mode == "eps":
+        primary = bin_by_id[bin_id]
+        cand_bin_ids = [bin_id]
+        # Spillover when y_obs[7] sits within eps_cm of a bin edge
+        if (y8 - float(primary["y8_lo"])) < eps_cm and (bin_id - 1) in bin_by_id:
+            cand_bin_ids.append(bin_id - 1)
+        if (float(primary["y8_hi"]) - y8) < eps_cm and (bin_id + 1) in bin_by_id:
+            cand_bin_ids.append(bin_id + 1)
+    elif mode == "cross_bin":
+        cand_bin_ids = sorted(bin_by_id.keys())  # all bins
+    elif mode == "hybrid":
+        cand_bin_ids = sorted(bin_by_id.keys())  # all bins, but we'll cap non-primary to top-1
+    else:
+        raise ValueError(f"unknown --shape-l2-mode={mode}")
+
+    # Collect candidates per bin in that bin's own PCA space
+    cands: list[tuple] = []
+    for bid in cand_bin_ids:
+        b = bin_by_id[bid]
+        _, per_sub = _pca_dist_in_bin(y_obs, b)
+        per_sub.sort(key=lambda x: x[1])
+        if mode == "cross_bin":
+            # C1: each bin contributes its top-1
+            sid, d = per_sub[0]
+            cands.append((bid, sid, d))
+        elif mode == "hybrid" and bid != bin_id:
+            # C3: non-primary bins contribute top-1
+            sid, d = per_sub[0]
+            cands.append((bid, sid, d))
+        else:
+            # hard / eps / hybrid-primary: keep all subs in this bin
+            for sid, d in per_sub:
+                cands.append((bid, sid, d))
+
+    cands.sort(key=lambda x: x[2])  # sort by PCA dist (cross-bin: heuristic only)
     return cands[:max(1, k)]
 
 
@@ -269,7 +329,9 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
     with open(sd / "state.pkl", "rb") as f:
         state = pickle.load(f)
     top_k = max(1, int(getattr(args, "shape_top_k", 1)))
-    cands = _route_topk_subs(y_obs, state, top_k)
+    l2_mode = str(getattr(args, "shape_l2_mode", "hard"))
+    eps_cm = float(getattr(args, "shape_l2_eps_cm", 0.5))
+    cands = _route_topk_subs(y_obs, state, top_k, mode=l2_mode, eps_cm=eps_cm)
     if not cands:
         bin_id, sub_id = route_y_to_sub(y_obs, state)
         cands = [(bin_id, sub_id, 0.0)]
@@ -651,3 +713,24 @@ def add_argparse_args(ap) -> None:
                     help="Plan E: softmax temperature on PCA distance. "
                          "Smaller = sharper top-1 weight. Larger = more "
                          "even consensus.")
+    # ---- L2 (length-bin) gate softening (Fix A / C1 / C3) ----
+    # Background: L2 gate uses real y_obs[7] against bin edges that were
+    # learned on SIM data. With known sim>real bias (e.g. surface tension
+    # absent in MPM), real y_obs[7] near a bin upper edge gets routed to
+    # the lower bin even though the truth-θ would lie in the upper bin.
+    ap.add_argument("--shape-l2-mode", type=str, default="hard",
+                    choices=["hard", "eps", "cross_bin", "hybrid"],
+                    help="L2 (length-bin) gate behaviour: "
+                         "'hard' = legacy strict bin lookup; "
+                         "'eps' = Fix A — when y_obs[7] is within "
+                         "--shape-l2-eps-cm of a bin edge, also pull all "
+                         "subs from the neighbour bin into the candidate "
+                         "pool; "
+                         "'cross_bin' = C1 — ignore L2, take each bin's "
+                         "top-1 sub (per-bin PCA), rank meta by GP "
+                         "fidelity at the sub's z_nn; "
+                         "'hybrid' = C3 — primary bin's full subs (legacy) "
+                         "+ each non-primary bin's top-1 sub.")
+    ap.add_argument("--shape-l2-eps-cm", type=float, default=0.5,
+                    help="Fix A: distance (cm) from y_obs[7] to a bin edge "
+                         "below which the neighbour bin is also pulled in.")
