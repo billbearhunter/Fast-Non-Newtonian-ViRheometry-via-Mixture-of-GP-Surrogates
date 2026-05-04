@@ -1,0 +1,23 @@
+{
+  "material": "Chuno",
+  "setup_1": {
+    "H": 2.7,
+    "W": 2.5,
+    "name": "ref_Chuno_2.7_2.5_1"
+  },
+  "setup_2": {
+    "H": 2.0,
+    "W": 4.0,
+    "name": "ref_Chuno_2.0_4.0_2"
+  },
+  "theta_hat": {
+    "n": 0.38974495341845383,
+    "eta": 17.194206461508983,
+    "sigma_y": 53.81695594269679
+  },
+  "objective": 0.003814102450644585,
+  "opt_s": 41.52997970581055,
+  "sy_anchor": NaN,
+  "sy_single_a": NaN,
+  "sy_single_b": NaN
+}
