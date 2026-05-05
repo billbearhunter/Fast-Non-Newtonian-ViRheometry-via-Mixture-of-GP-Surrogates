@@ -348,41 +348,53 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
     top_k = max(1, int(getattr(args, "shape_top_k", 1)))
     l2_mode = str(getattr(args, "shape_l2_mode", "hard"))
     eps_cm = float(getattr(args, "shape_l2_eps_cm", 0.5))
-    cands = _route_topk_subs(y_obs, state, top_k, mode=l2_mode, eps_cm=eps_cm)
+    weight_mode = str(getattr(args, "shape_weight_mode", "pca"))
+    ctx = make_context(xs, ys, W, H, y_obs, device, dtype)
+
+    # Selection (Option D): when weight_mode='gp_fit', oversample candidates
+    # by PCA distance, then re-rank by GP-fit at z_nn and keep top-K. This
+    # makes K=1 actually pick the single best-fitting sub instead of the
+    # PCA-best (which on Chuno A is sub_15 with the largest GP error).
+    #   pca   : legacy. PCA-distance ranking AND PCA-distance softmax weights.
+    #   gp_fit: GP-fit-at-z_nn ranking AND softmax weights.  Cross-bin
+    #           comparable.  Selection cost ≈ K × (sub-load 50–200 ms +
+    #           1 GP forward).  For oversample=3 this adds at most ~1 s
+    #           of routing time, dominated by sub-loading I/O.
+    over_factor = int(getattr(args, "shape_gpfit_oversample", 3))
+    fetch_k = top_k * over_factor if weight_mode == "gp_fit" else top_k
+    cands = _route_topk_subs(y_obs, state, fetch_k, mode=l2_mode, eps_cm=eps_cm)
     if not cands:
         bin_id, sub_id = route_y_to_sub(y_obs, state)
         cands = [(bin_id, sub_id, 0.0)]
-    members = []
-    dists = []
+    over_members = []
+    over_pca_dists = []
     for bin_id, sub_id, d in cands:
         try:
             m = _build_sub_member(sd, sub_id, bin_id, y_obs, xs, ys, device, dtype)
-            members.append(m); dists.append(d)
+            over_members.append(m); over_pca_dists.append(d)
         except FileNotFoundError:
             continue  # skip missing experts
-    ctx = make_context(xs, ys, W, H, y_obs, device, dtype)
-    # Softmax weights — two modes (Option E):
-    #   pca   : legacy. weight ∝ exp(-pca_dist/τ); pca_dist measures
-    #           y_obs shape similarity to sub centroid in the bin's PCA space.
-    #   gp_fit: weight ∝ exp(-||GP_i(z_nn_i) - y_obs||/τ); fit_dist measures
-    #           how close the sub's GP, evaluated at its training point
-    #           nearest to y_obs, actually predicts y_obs. This is a direct
-    #           y-space goodness measure that survives across bins (PCA
-    #           distance is per-bin and not strictly comparable).
-    weight_mode = str(getattr(args, "shape_weight_mode", "pca"))
+
+    if weight_mode == "gp_fit":
+        # Score every oversampled candidate by GP-fit at its own z_nn and
+        # keep the K best.  Then derive softmax weights from the same scores.
+        fit_dists = []
+        for m in over_members:
+            y_pred, _ = _predict_one(m.z_nn, m, ctx)
+            fit_dists.append(float(np.linalg.norm(y_pred - y_obs)))
+        order = np.argsort(np.asarray(fit_dists))
+        keep = order[:max(1, top_k)]
+        members = [over_members[i] for i in keep]
+        d_kept = np.asarray([fit_dists[i] for i in keep], dtype=np.float64)
+    elif weight_mode == "pca":
+        members = over_members[:max(1, top_k)]
+        d_kept = np.asarray(over_pca_dists[:max(1, top_k)], dtype=np.float64)
+    else:
+        raise ValueError(f"unknown --shape-weight-mode={weight_mode}")
+
     if len(members) > 1:
-        if weight_mode == "gp_fit":
-            fit_dists = []
-            for m in members:
-                y_pred, _ = _predict_one(m.z_nn, m, ctx)
-                fit_dists.append(float(np.linalg.norm(y_pred - y_obs)))
-            d_arr = np.asarray(fit_dists, dtype=np.float64)
-        elif weight_mode == "pca":
-            d_arr = np.asarray(dists, dtype=np.float64)
-        else:
-            raise ValueError(f"unknown --shape-weight-mode={weight_mode}")
         tau = float(getattr(args, "shape_topk_softmax_tau", 1.5))
-        ws = np.exp(-(d_arr - d_arr.min()) / max(tau, 1e-3))
+        ws = np.exp(-(d_kept - d_kept.min()) / max(tau, 1e-3))
         ws = ws / ws.sum()
     else:
         ws = np.array([1.0])
@@ -419,10 +431,10 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     weights = weights / max(weights.sum(), 1e-9)
     primary = members[0]
     ctx = item["ctx"]
-    fb_lo = ctx[6].detach().cpu().numpy().astype(np.float64)
+    fb_lo_orig = ctx[6].detach().cpu().numpy().astype(np.float64)
     fb_hi = ctx[7].detach().cpu().numpy().astype(np.float64)
+    fb_lo = fb_lo_orig.copy()
     if args.sigma_y_min > 0:
-        fb_lo = fb_lo.copy()
         fb_lo[2] = max(fb_lo[2], float(np.log(args.sigma_y_min)))
     pad = float(getattr(args, "shape_box_pad", 0.10))
     # Plan E: when top-K > 1, expand bbox to UNION of all members (so CMA
@@ -431,6 +443,10 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     z_hi_union = np.max(np.stack([m.z_hi for m in members]), axis=0)
     lo = np.maximum(z_lo_union - pad * Z_SCALE_NP, fb_lo)
     hi = np.minimum(z_hi_union + pad * Z_SCALE_NP, fb_hi)
+    # Guard: sigma_y_min floor can push lo[2] above hi[2] for lo-half subs
+    # (σy-split). Fall back to global lower bound (no floor) on dim 2 only.
+    if lo[2] >= hi[2] - 1e-3:
+        lo[2] = max(z_lo_union[2] - pad * Z_SCALE_NP[2], fb_lo_orig[2])
     x0 = np.maximum(np.minimum(primary.z_nn, hi - 1e-3), lo + 1e-3)
 
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
@@ -521,10 +537,10 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
     ma = members_a[0]
     mb = members_b[0]
     ctx_a, ctx_b = item_a["ctx"], item_b["ctx"]
-    fb_lo = ctx_a[6].detach().cpu().numpy().astype(np.float64)
+    fb_lo_orig = ctx_a[6].detach().cpu().numpy().astype(np.float64)
     fb_hi = ctx_a[7].detach().cpu().numpy().astype(np.float64)
+    fb_lo = fb_lo_orig.copy()
     if args.sigma_y_min > 0:
-        fb_lo = fb_lo.copy()
         fb_lo[2] = max(fb_lo[2], float(np.log(args.sigma_y_min)))
     pad = float(getattr(args, "shape_box_pad", 0.10))
     # Plan E: union bbox over all top-K members (both setups)
@@ -535,6 +551,12 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         hi = np.minimum(all_hi.max(axis=0) + pad * Z_SCALE_NP, fb_hi)
     else:
         lo, hi = _make_box_for_pair(ma, mb, fb_lo, fb_hi, pad=pad)
+    # Guard: sigma_y_min floor can push lo[2] above hi[2] for lo-half subs
+    # (σy-split). Fall back to global lower bound (no floor) on dim 2 only.
+    if lo[2] >= hi[2] - 1e-3:
+        all_lo_union = (all_lo if len(members_a) > 1 or len(members_b) > 1
+                        else np.stack([ma.z_lo, mb.z_lo]))
+        lo[2] = max(all_lo_union.min(axis=0)[2] - pad * Z_SCALE_NP[2], fb_lo_orig[2])
     x0 = clamp_z(0.5 * (ma.z_nn + mb.z_nn))
     x0 = np.maximum(np.minimum(x0, hi - 1e-3), lo + 1e-3)
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
@@ -782,6 +804,13 @@ def add_argparse_args(ap) -> None:
                          "cannot predict y_obs even at its own nearest "
                          "training θ. Cross-bin comparable (unlike PCA "
                          "distance). Adds K cheap GP evals at routing time.")
+    ap.add_argument("--shape-gpfit-oversample", type=int, default=3,
+                    help="Option D: when --shape-weight-mode=gp_fit, "
+                         "oversample factor for the PCA pre-filter. "
+                         "Routing fetches K * factor candidates by PCA "
+                         "distance, then re-ranks by GP-fit at z_nn and "
+                         "keeps the top-K.  Larger = more thorough but "
+                         "+(50-200ms × extra subs) routing overhead.")
     ap.add_argument("--shape-frame-w", type=float, nargs=8, default=None,
                     metavar=("F1","F2","F3","F4","F5","F6","F7","F8"),
                     help="Override per-frame loss weight (default "
