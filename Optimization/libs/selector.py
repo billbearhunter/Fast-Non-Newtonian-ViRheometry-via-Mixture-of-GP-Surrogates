@@ -298,6 +298,44 @@ def _gaussian_prior(z, member: SubMember) -> float:
     return float(0.5 * np.sum(((z - member.z_mu) / member.z_scale) ** 2))
 
 
+def _mog_prior_neg_log(z, members, weights) -> float:
+    """Method B: Mixture-of-Gaussians prior — Bayesian marginalisation
+    over the routed cluster ensemble.
+
+        −log p(z) = − log Σ_k π_k · 𝒩(z; μ_k, diag(σ_k²))
+                  = − logsumexp_k [log π_k − ½‖(z−μ_k)/σ_k‖² − Σ_j log σ_kj]
+                  (up to z-independent constant ½ d log 2π)
+
+    π_k are taken to be the routing ensemble weights (data-driven
+    cluster posterior).  Compared to Method A's weighted-average
+    quadratic prior, the logsumexp lets one cluster *dominate softly*
+    when z is near its mode while never zeroing out the others.
+
+    Why MoG is more honest than Method A's mean-anchor:
+      * Top-K routing may include wrong clusters; under Method A every
+        member contributes a quadratic pull (weighted average).  Under
+        MoG, far-away wrong clusters receive vanishing posterior
+        responsibility automatically (their term drops out of the
+        logsumexp), so the prior is robust to routing errors.
+      * Eliminates the two-stage "pick K then prior" — there is just
+        one Bayes prior with cluster-membership marginalised out.
+      * For y_obs near a cluster boundary (between two centroids), the
+        MoG smoothly interpolates between modes; Method A's
+        weighted-average centroid would land in a low-density valley.
+    """
+    log_pi = np.log(np.maximum(np.asarray(weights, dtype=np.float64), 1e-12))
+    z_arr = np.asarray(z, dtype=np.float64)
+    log_terms = np.empty(len(members), dtype=np.float64)
+    for i, (m, lp) in enumerate(zip(members, log_pi)):
+        d = (z_arr - m.z_mu) / m.z_scale
+        mahala = 0.5 * float(np.dot(d, d))
+        log_norm = float(np.sum(np.log(m.z_scale)))   # ½ log det Σ_k
+        log_terms[i] = lp - mahala - log_norm
+    mx = float(log_terms.max())
+    log_p = mx + float(np.log(np.sum(np.exp(log_terms - mx))))
+    return -log_p
+
+
 def _support_penalty(z, member: SubMember) -> float:
     over = np.maximum(z - member.z_hi, 0.0)
     under = np.maximum(member.z_lo - z, 0.0)
@@ -854,6 +892,8 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     log_priors = np.log(np.maximum(weights, 1e-12))
     # Method A: per-sub Gaussian prior weight (default 0 = off; 1.0 = MAP)
     gauss_w = float(getattr(args, "shape_gaussian_prior_weight", 0.0))
+    # Method B: Mixture-of-Gaussians prior weight (default 0 = off; 1.0 = MAP)
+    mog_pri_w = float(getattr(args, "shape_mog_prior_weight", 0.0))
     def loss(z):
         if use_mog:
             # Bayesian Mixture-of-GPs negative log marginal likelihood.
@@ -880,7 +920,8 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
                 prior = sy_prior_w_single * ((z[2] - log_sy_anchor_single) / log_sy_prior_std_single) ** 2
             gp_total = sum(float(np.exp(w_log)) * _gaussian_prior(z, m)
                             for m, w_log in zip(members, log_priors))
-            return -log_p + sup_w * sup_total + gauss_w * gp_total + prior
+            mog_pri = _mog_prior_neg_log(z, members, weights) if mog_pri_w > 0 else 0.0
+            return -log_p + sup_w * sup_total + gauss_w * gp_total + mog_pri_w * mog_pri + prior
         # Legacy paths (linear / log_nuisance / log_nuisance_gp) below
         l_total = 0.0
         sup_total = 0.0
@@ -902,7 +943,8 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
         prior = 0.0
         if log_sy_anchor_single is not None:
             prior = sy_prior_w_single * ((z[2] - log_sy_anchor_single) / log_sy_prior_std_single) ** 2
-        return l_total + sup_w * sup_total + gauss_w * gp_total + prior
+        mog_pri = _mog_prior_neg_log(z, members, weights) if mog_pri_w > 0 else 0.0
+        return l_total + sup_w * sup_total + gauss_w * gp_total + mog_pri_w * mog_pri + prior
 
     t0 = time.time()
     z_best, l_best, n_ev = _run_cma(
@@ -1085,6 +1127,7 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
     fw_a = item_a.get("frame_w", FRAME_W_NP)
     fw_b = item_b.get("frame_w", FRAME_W_NP)
     gauss_w = float(getattr(args, "shape_gaussian_prior_weight", 0.0))
+    mog_pri_w = float(getattr(args, "shape_mog_prior_weight", 0.0))
     sigma_obs_log = float(getattr(args, "shape_gp_noise_log_floor", 0.05))
     def loss(z):
         # Plan E: weighted consensus across top-K members for each setup
@@ -1124,6 +1167,19 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         # sub-experts; we average their views of the prior so the prior
         # contribution stays comparable to single-setup magnitude.
         gp = 0.5 * (gp_a_total + gp_b_total)
+        # Method B (MoG): logsumexp over the union of routed clusters
+        # from both setups.  Sharing one MoG between setups is the
+        # Bayes-correct way (single prior on z); we union the routed
+        # ensembles so a cluster that is dominant under setup A
+        # competes against clusters dominant under setup B in one
+        # mixture.  When members_a == members_b the union equals each
+        # ensemble alone.
+        mog_pri = 0.0
+        if mog_pri_w > 0:
+            members_union = list(members_a) + list(members_b)
+            ws_union = np.concatenate([0.5 * ws_a, 0.5 * ws_b])  # already-normalised
+            ws_union = ws_union / max(ws_union.sum(), 1e-9)
+            mog_pri = _mog_prior_neg_log(z, members_union, ws_union)
         prior = 0.0
         if log_sy_anchor is not None:
             prior = ((z[2] - log_sy_anchor) / log_sy_prior_std) ** 2
@@ -1134,7 +1190,8 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         # no narrower than single — the 1/2 made the joint behave like a
         # weighted-average of the two single losses rather than a proper
         # multi-data posterior.
-        return l_a_total + l_b_total + sup_w * sup + gauss_w * gp + sy_prior_w * prior
+        return (l_a_total + l_b_total + sup_w * sup + gauss_w * gp
+                + mog_pri_w * mog_pri + sy_prior_w * prior)
 
     t0 = time.time()
     z_best, l_best, n_ev = _run_cma(
@@ -1311,6 +1368,21 @@ def add_argparse_args(ap) -> None:
                          "(Σᵢwᵢ Λ_i⁻¹)⁻¹.  λ=1.0 = standard MAP, smaller "
                          "= weaker pull, 0 = off (legacy).  Recommended: "
                          "1.0 to anchor σ_y away from extreme bbox edges.")
+    ap.add_argument("--shape-mog-prior-weight", type=float, default=0.0,
+                    help="Method B: Mixture-of-Gaussians prior weight "
+                         "λ added to the CMA-ES loss as "
+                         "−λ · logsumexp_k [log π_k − ½‖(z−μ_k)/σ_k‖² "
+                         "− Σ_j log σ_kj] where π_k = routing ensemble "
+                         "weights and (μ_k, σ_k) come from each routed "
+                         "sub's training data.  Compared to Method A's "
+                         "weighted-average quadratic prior, the "
+                         "logsumexp lets one cluster softly dominate "
+                         "when z is near its mode and is robust to "
+                         "wrong-cluster routing (far clusters drop out "
+                         "of the logsumexp automatically).  λ=1.0 = "
+                         "standard MAP, 0 = off.  Use INSTEAD of "
+                         "--shape-gaussian-prior-weight, not in "
+                         "addition (combining double-counts the prior).")
     ap.add_argument("--shape-long-y8-spillover-factor", type=float, default=0.0,
                     help="Flat partition only. Forces a 'long-flow' cluster's "
                          "σ_y-low sub into the ensemble with this weight share "
