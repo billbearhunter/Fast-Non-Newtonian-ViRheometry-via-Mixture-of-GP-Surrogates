@@ -557,7 +557,17 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         all_lo_union = (all_lo if len(members_a) > 1 or len(members_b) > 1
                         else np.stack([ma.z_lo, mb.z_lo]))
         lo[2] = max(all_lo_union.min(axis=0)[2] - pad * Z_SCALE_NP[2], fb_lo_orig[2])
-    x0 = clamp_z(0.5 * (ma.z_nn + mb.z_nn))
+    # Warm-start: when setup2 is invoked with --shape-warm-start-from-first,
+    # setup2.py reads <first_dir>/theta_hat.json and writes the unpacked z
+    # into args.shape_warm_start_z.  Use it as CMA-ES x0 (and as the σY
+    # anchor below if --shape-sy-prior-weight > 0) instead of the legacy
+    # midpoint of the two members' z_nn.  Lets a strong setup1 K=3 result
+    # warm a fast joint K=1 / K=2 inverse.
+    ws_z = getattr(args, "shape_warm_start_z", None)
+    if ws_z is not None:
+        x0 = clamp_z(np.asarray(ws_z, dtype=np.float64))
+    else:
+        x0 = clamp_z(0.5 * (ma.z_nn + mb.z_nn))
     x0 = np.maximum(np.minimum(x0, hi - 1e-3), lo + 1e-3)
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
     loss_mode = args.loss_mode
@@ -570,7 +580,21 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
     sat_lo = float(getattr(args, "shape_sy_sat_lo", 8.0))
     sat_hi = float(getattr(args, "shape_sy_sat_hi", 380.0))
     sat_factor = float(getattr(args, "shape_sy_prior_sat_factor", 0.0))
-    if sy_prior_w > 0:
+    if sy_prior_w > 0 and ws_z is not None:
+        # Warm-start path: use the σY of the supplied warm-start θ̂ as the
+        # anchor directly. Skips the expensive internal stage-1 single
+        # inverses; relies on the caller having run setup1 (e.g. K=3) and
+        # producing a trustworthy σY.  Mimics res_a/res_b structure for
+        # downstream code by routing both setups to the same supplied σY.
+        sy_anchor_ret = float(np.exp(ws_z[2]))
+        log_sy_anchor = float(ws_z[2])
+        log_sy_prior_std = max(
+            float(getattr(args, "shape_sy_prior_min_std", 0.4)),
+            0.5,  # widely permissive when no disagreement signal available
+        )
+        sy_a_ret = sy_anchor_ret
+        sy_b_ret = sy_anchor_ret
+    elif sy_prior_w > 0:
         # Stage-1: single inverse on each setup
         try:
             res_a = inverse_single_shape(item_a, args, device, dtype)

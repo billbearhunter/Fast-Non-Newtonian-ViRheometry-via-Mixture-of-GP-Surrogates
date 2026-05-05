@@ -75,10 +75,36 @@ def main():
     ap.add_argument("--sigma-trend", type=float, default=0.20)
     ap.add_argument("--sigma-y-min", type=float, default=5.0)
     ap.add_argument("--inverse-mode", choices=["shape"], default="shape")
+    ap.add_argument("--shape-warm-start-from-first", action="store_true",
+                    help="Read <first_dir>/theta_hat.json (must exist; "
+                         "produced by a prior setup1 run) and use its θ̂ "
+                         "as joint CMA-ES warm-start x0.  When combined "
+                         "with --shape-sy-prior-weight > 0 also uses "
+                         "setup1's σY directly as the prior anchor "
+                         "(skipping setup2's expensive internal stage-1 "
+                         "single inverses).  Workflow: setup1 -K=3 → "
+                         "writes theta_hat.json → setup2 -K=1 with this "
+                         "flag picks up the warm-start cheaply.")
     SHA.add_argparse_args(ap)
     args = ap.parse_args()
 
     V10.STATE_ROOT = args.state_root.resolve()
+    if args.shape_warm_start_from_first:
+        ws_path = args.first_dir.resolve() / "theta_hat.json"
+        if not ws_path.is_file():
+            sys.exit(f"--shape-warm-start-from-first: missing {ws_path}; run setup1 first")
+        ws_data = json.loads(ws_path.read_text())
+        ws_th = ws_data.get("theta_hat", {})
+        if not all(k in ws_th for k in ("n", "eta", "sigma_y")):
+            sys.exit(f"{ws_path}: missing theta_hat.{{n,eta,sigma_y}}")
+        args.shape_warm_start_z = np.array([
+            float(ws_th["n"]),
+            float(np.log(max(float(ws_th["eta"]), 1e-9))),
+            float(np.log(max(float(ws_th["sigma_y"]), 1e-9))),
+        ], dtype=np.float64)
+        print(f"[warm-start] x0 from {ws_path}: theta = "
+              f"(n={ws_th['n']:.4f}, eta={ws_th['eta']:.4f}, "
+              f"sigma_y={ws_th['sigma_y']:.4f})")
     out = estimate(args.first_dir.resolve(), args.second_dir.resolve(), args)
     (args.second_dir / "theta_hat.json").write_text(json.dumps(out, indent=2))
     print(json.dumps(out, indent=2))
