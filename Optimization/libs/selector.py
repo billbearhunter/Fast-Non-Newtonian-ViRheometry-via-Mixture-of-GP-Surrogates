@@ -47,6 +47,28 @@ FRAME_W_NP = np.array([0.2, 0.2, 0.35, 0.5, 0.8, 1.0, 1.4, 2.0], dtype=np.float6
 Z_SCALE_NP = np.array([0.20, 0.90, 1.20], dtype=np.float64)
 
 
+def _info_frame_w(member, z_ref: np.ndarray, ctx, h: float = 0.01) -> np.ndarray:
+    """Improvement (5): info-weighted frame loss.
+
+    Per-frame loss weight ∝ ‖∂y_i/∂z‖ at z_ref.  Frames where the surrogate
+    is sensitive to θ get more weight; frames that are flat (uninformative)
+    get less.  Computed via finite difference (3 extra GP forward calls,
+    sub-millisecond cost).  Returns 8-vector normalised so that sum=8 to
+    keep the loss scale comparable to the legacy fixed weights.
+    """
+    y0, _ = _predict_one(z_ref, member, ctx)
+    J = np.zeros((8, 3))
+    for d in range(3):
+        zp = z_ref.copy()
+        zp[d] += h
+        yp, _ = _predict_one(zp, member, ctx)
+        J[:, d] = (yp - y0) / h
+    sens = np.linalg.norm(J, axis=1)
+    # Avoid zero weights — floor at 5% of max sensitivity
+    sens = np.maximum(sens, 0.05 * sens.max())
+    return sens / sens.sum() * 8.0  # normalise so sum=8 (same as legacy)
+
+
 def _resolve_frame_w(args) -> np.ndarray:
     """Return per-frame weights honoring --shape-frame-w override.
 
@@ -261,7 +283,8 @@ def _pca_dist_in_bin(y_obs: np.ndarray, bin_obj: dict) -> tuple[np.ndarray, list
 
 
 def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int,
-                      mode: str = "hard", eps_cm: float = 0.0) -> list[tuple]:
+                      mode: str = "hard", eps_cm: float = 0.0,
+                      eps_cap_by_primary: bool = False) -> list[tuple]:
     """Return top-K (bin_id, sub_id, pca_dist) sorted by ascending PCA distance.
 
     Plan E: instead of top-1, return up to K candidate subs.
@@ -308,15 +331,31 @@ def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int,
         cand_bin_ids = sorted(bin_by_id.keys())  # all bins
     elif mode == "hybrid":
         cand_bin_ids = sorted(bin_by_id.keys())  # all bins, but we'll cap non-primary to top-1
+    elif mode == "soft_attn":
+        # Improvement (4): soft binning attention. Pull from ALL bins but
+        # add bin-distance penalty to each sub's PCA distance.  Replaces
+        # hard L2 + ε spillover with a smooth fall-off.
+        cand_bin_ids = sorted(bin_by_id.keys())
     else:
         raise ValueError(f"unknown --shape-l2-mode={mode}")
 
     # Collect candidates per bin in that bin's own PCA space
+    primary_n = len(bin_by_id[bin_id]["subs"])
+    # Improvement (4): soft attention bin penalty
+    soft_attn_gamma = 0.0
+    if mode == "soft_attn":
+        # default attention sharpness: γ=2 in log(y8) units
+        soft_attn_gamma = 2.0  # could expose as flag if needed
     cands: list[tuple] = []
     for bid in cand_bin_ids:
         b = bin_by_id[bid]
         _, per_sub = _pca_dist_in_bin(y_obs, b)
         per_sub.sort(key=lambda x: x[1])
+        bin_penalty = 0.0
+        if mode == "soft_attn":
+            log_y8 = float(np.log(max(y8, 1e-3)))
+            log_bc = float(np.log(max(0.5 * (b["y8_lo"] + b["y8_hi"]), 1e-3)))
+            bin_penalty = soft_attn_gamma * abs(log_y8 - log_bc)
         if mode == "cross_bin":
             # C1: each bin contributes its top-1
             sid, d = per_sub[0]
@@ -326,9 +365,17 @@ def _route_topk_subs(y_obs: np.ndarray, state: dict, k: int,
             sid, d = per_sub[0]
             cands.append((bid, sid, d))
         else:
-            # hard / eps / hybrid-primary: keep all subs in this bin
+            # hard / eps / hybrid-primary / soft_attn: keep all subs in bin.
+            # Fix A v2: when eps spillover from a non-primary bin would
+            # contribute more subs than the primary bin (which biases the
+            # ensemble toward whichever side has more subs — empirically
+            # observed on Okonomiyaki where bin_2 spillover added 9 subs
+            # vs bin_3 primary's 7, dragging σ_y to a high-σ_y compromise),
+            # cap the spillover at primary_n top-PCA subs.
+            if eps_cap_by_primary and mode == "eps" and bid != bin_id and len(per_sub) > primary_n:
+                per_sub = per_sub[:primary_n]
             for sid, d in per_sub:
-                cands.append((bid, sid, d))
+                cands.append((bid, sid, d + bin_penalty))
 
     cands.sort(key=lambda x: x[2])  # sort by PCA dist (cross-bin: heuristic only)
     return cands[:max(1, k)]
@@ -361,8 +408,10 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
     #           1 GP forward).  For oversample=3 this adds at most ~1 s
     #           of routing time, dominated by sub-loading I/O.
     over_factor = int(getattr(args, "shape_gpfit_oversample", 3))
-    fetch_k = top_k * over_factor if weight_mode == "gp_fit" else top_k
-    cands = _route_topk_subs(y_obs, state, fetch_k, mode=l2_mode, eps_cm=eps_cm)
+    fetch_k = top_k * over_factor if weight_mode in ("gp_fit", "inv_var") else top_k
+    eps_cap = bool(getattr(args, "shape_eps_cap_by_primary", False))
+    cands = _route_topk_subs(y_obs, state, fetch_k, mode=l2_mode, eps_cm=eps_cm,
+                              eps_cap_by_primary=eps_cap)
     if not cands:
         bin_id, sub_id = route_y_to_sub(y_obs, state)
         cands = [(bin_id, sub_id, 0.0)]
@@ -386,24 +435,51 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
         keep = order[:max(1, top_k)]
         members = [over_members[i] for i in keep]
         d_kept = np.asarray([fit_dists[i] for i in keep], dtype=np.float64)
+    elif weight_mode == "inv_var":
+        # Improvement (1) — BLUE inverse-variance weighting.
+        # Each sub's GP returns a frame-wise predictive σ at z_nn; aggregate
+        # to a scalar σ_total² and weight ∝ 1/σ_total².  Selects top-K by
+        # smallest σ_total² (most-confident GPs at z_nn) and uses the same
+        # scores as multiplicative weights (NO softmax — true BLUE).
+        # Theory: weighted least squares with inverse-variance weights is
+        # the minimum-variance unbiased linear estimator (Gauss-Markov).
+        sigma_totals = []
+        for m in over_members:
+            _, sigma = _predict_one(m.z_nn, m, ctx)
+            sigma_totals.append(float(np.sqrt(np.mean(np.asarray(sigma) ** 2))))
+        sig_arr = np.asarray(sigma_totals, dtype=np.float64)
+        order = np.argsort(sig_arr)  # ascending: smallest sigma first
+        keep = order[:max(1, top_k)]
+        members = [over_members[i] for i in keep]
+        sig_kept = sig_arr[keep]
+        # BLUE weights = (1/σ²) / Σ(1/σ²)
+        inv_var = 1.0 / np.maximum(sig_kept ** 2, 1e-12)
+        d_kept = sig_kept  # informational only (for downstream callers)
     elif weight_mode == "pca":
         members = over_members[:max(1, top_k)]
         d_kept = np.asarray(over_pca_dists[:max(1, top_k)], dtype=np.float64)
     else:
         raise ValueError(f"unknown --shape-weight-mode={weight_mode}")
 
-    if len(members) > 1:
+    if weight_mode == "inv_var" and len(members) > 1:
+        ws = inv_var / inv_var.sum()
+    elif len(members) > 1:
         tau = float(getattr(args, "shape_topk_softmax_tau", 1.5))
         ws = np.exp(-(d_kept - d_kept.min()) / max(tau, 1e-3))
         ws = ws / ws.sum()
     else:
         ws = np.array([1.0])
+    # Resolve frame weights: legacy override or info-weighted (improvement 5)
+    if bool(getattr(args, "shape_info_frame_w", False)) and len(members) >= 1:
+        frame_w_used = _info_frame_w(members[0], members[0].z_nn, ctx)
+    else:
+        frame_w_used = _resolve_frame_w(args)
     return {
         "setup": setup_name, "W": W, "H": H, "y_obs": y_obs,
         "gid": gid, "state_dir": sd,
         "bin_id": int(members[0].bin_id), "sub_id": int(members[0].sub_id),
         "members": members, "member_weights": ws.tolist(), "ctx": ctx,
-        "frame_w": _resolve_frame_w(args),
+        "frame_w": frame_w_used,
     }
 
 
@@ -441,12 +517,19 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     # can search across all candidate subs)
     z_lo_union = np.min(np.stack([m.z_lo for m in members]), axis=0)
     z_hi_union = np.max(np.stack([m.z_hi for m in members]), axis=0)
-    lo = np.maximum(z_lo_union - pad * Z_SCALE_NP, fb_lo)
-    hi = np.minimum(z_hi_union + pad * Z_SCALE_NP, fb_hi)
+    # Improvement (6): use per-sub z_scale (training-data std per dim) instead
+    # of fixed Z_SCALE_NP for bbox padding.  union over members' z_scale gives
+    # a width adaptive to the routed subs (wider when subs span more variance).
+    if bool(getattr(args, "shape_per_sub_z_scale", False)):
+        zs_pad = np.max(np.stack([m.z_scale for m in members]), axis=0)
+    else:
+        zs_pad = Z_SCALE_NP
+    lo = np.maximum(z_lo_union - pad * zs_pad, fb_lo)
+    hi = np.minimum(z_hi_union + pad * zs_pad, fb_hi)
     # Guard: sigma_y_min floor can push lo[2] above hi[2] for lo-half subs
     # (σy-split). Fall back to global lower bound (no floor) on dim 2 only.
     if lo[2] >= hi[2] - 1e-3:
-        lo[2] = max(z_lo_union[2] - pad * Z_SCALE_NP[2], fb_lo_orig[2])
+        lo[2] = max(z_lo_union[2] - pad * zs_pad[2], fb_lo_orig[2])
     x0 = np.maximum(np.minimum(primary.z_nn, hi - 1e-3), lo + 1e-3)
 
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
@@ -494,7 +577,7 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
         sigma0=getattr(args, "shape_sigma0", 0.25),
         max_iter=getattr(args, "shape_max_iter", 30),
         popsize=getattr(args, "shape_popsize", 12),
-        seed=7 + primary.sub_id,
+        seed=7 + primary.sub_id + int(getattr(args, "shape_cma_seed_offset", 0)),
     )
     theta = z_to_theta(z_best)
     # Plan E: pick the member whose forward GP best matches y_obs at z_best
@@ -803,7 +886,7 @@ def add_argparse_args(ap) -> None:
     # absent in MPM), real y_obs[7] near a bin upper edge gets routed to
     # the lower bin even though the truth-θ would lie in the upper bin.
     ap.add_argument("--shape-l2-mode", type=str, default="hard",
-                    choices=["hard", "eps", "cross_bin", "hybrid"],
+                    choices=["hard", "eps", "cross_bin", "hybrid", "soft_attn"],
                     help="L2 (length-bin) gate behaviour: "
                          "'hard' = legacy strict bin lookup; "
                          "'eps' = Fix A — when y_obs[7] is within "
@@ -818,8 +901,33 @@ def add_argparse_args(ap) -> None:
     ap.add_argument("--shape-l2-eps-cm", type=float, default=0.5,
                     help="Fix A: distance (cm) from y_obs[7] to a bin edge "
                          "below which the neighbour bin is also pulled in.")
+    ap.add_argument("--shape-per-sub-z-scale", action="store_true",
+                    help="Improvement (6): use union of routed subs' "
+                         "per-training-data z_scale for the CMA-ES bbox "
+                         "padding, instead of the fixed Z_SCALE_NP "
+                         "constant [0.20, 0.90, 1.20].  Adapts the box "
+                         "size to the routed members' actual variance.")
+    ap.add_argument("--shape-info-frame-w", action="store_true",
+                    help="Improvement (5): replace fixed --shape-frame-w "
+                         "with info-weighted Jacobian magnitude ∂y/∂z at "
+                         "primary member's z_nn (3 extra GP calls). Frames "
+                         "where the surrogate is most sensitive to θ get "
+                         "more weight in the CMA-ES loss.")
+    ap.add_argument("--shape-cma-seed-offset", type=int, default=0,
+                    help="Improvement (3): offset added to CMA-ES seed. "
+                         "Run setup1 with different offsets (0, 100, 200, "
+                         "300, 400) to detect identifiability-degenerate "
+                         "θ̂ clusters in surrogate loss landscape.")
+    ap.add_argument("--shape-eps-cap-by-primary", action="store_true",
+                    help="Fix A v2: when --shape-l2-mode=eps spillover is "
+                         "active, cap the neighbour bin's contribution to "
+                         "≤ primary bin sub count (top by PCA).  Avoids "
+                         "the case where a denser neighbour bin dominates "
+                         "the ensemble and biases σ_y the wrong direction "
+                         "(e.g. Okonomiyaki: bin_3 primary 7 subs vs bin_2 "
+                         "spillover 9 subs all biased high σ_y).")
     ap.add_argument("--shape-weight-mode", type=str, default="pca",
-                    choices=["pca", "gp_fit"],
+                    choices=["pca", "gp_fit", "inv_var"],
                     help="Option E: how to weight ensemble members. "
                          "'pca' = legacy softmax on PCA distance to sub "
                          "centroid in y-shape space; "
