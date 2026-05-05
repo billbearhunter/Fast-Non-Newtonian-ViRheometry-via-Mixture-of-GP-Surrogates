@@ -33,7 +33,11 @@ PIPE = Path(__file__).resolve().parents[1]
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from DataPipeline.headless_mls import HeadlessSimulatorMLS  # noqa: E402
+# HeadlessSimulatorMLS is only used by the CLI densification entry point
+# (see __main__ below).  Do NOT import it at module level — that would
+# pull in DataPipeline.headless_mls → taichi + MPM kernels for every
+# importer of this module (e.g. Optimization.libs.selector at inverse
+# time, where no simulation runs).  Use lazy import inside the CLI block.
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +204,7 @@ def main():
           f"(target subs: {cands.target_sub.value_counts().head(8).to_dict()})")
 
     print("\ninitialising MLS-MPM headless simulator (one-time)...")
+    from DataPipeline.headless_mls import HeadlessSimulatorMLS  # lazy: pulls taichi
     sim = HeadlessSimulatorMLS(arch="cuda")
 
     if a.out_csv is None:

@@ -176,6 +176,9 @@ def estimate(ref_dir: Path, args) -> dict:
             "settings_xml": str(xml_path),
         },
     }
+    if "theta_ci_95" in res:
+        out["theta_ci_95"] = res["theta_ci_95"]
+        out["z_std"] = res.get("z_std")
 
     (ref_dir / "theta_hat.json").write_text(json.dumps(out, indent=2), encoding="utf-8")
     return out
@@ -194,7 +197,7 @@ def main():
     ap.add_argument("--data-root", type=Path, default=None,
                     help="Root folder where proposed setup2 dir is created. "
                          "Default: same folder as <first-dir>")
-    ap.add_argument("--loss-mode", choices=["linear", "log_nuisance"], default="log_nuisance")
+    ap.add_argument("--loss-mode", choices=["linear", "log_nuisance", "log_nuisance_gp", "mog_likelihood"], default="log_nuisance")
     ap.add_argument("--sigma-bias", type=float, default=0.25)
     ap.add_argument("--sigma-trend", type=float, default=0.20)
     ap.add_argument("--sigma-y-min", type=float, default=5.0)
@@ -206,6 +209,15 @@ def main():
     out = estimate(args.first_dir.resolve(), args)
 
     print(json.dumps(out, indent=2))
+    th = out["theta_hat"]
+    if "theta_ci_95" in out:
+        ci = out["theta_ci_95"]
+        print(
+            f"\n=== θ̂ MAP and 95 % credible intervals (Laplace approx.) ==="
+            f"\n  n        = {th['n']:>8.4f}    CI 95%: [{ci['n'][0]:>8.4f}, {ci['n'][1]:>8.4f}]"
+            f"\n  η        = {th['eta']:>8.4f}    CI 95%: [{ci['eta'][0]:>8.4f}, {ci['eta'][1]:>8.4f}]"
+            f"\n  σ_y      = {th['sigma_y']:>8.4f}    CI 95%: [{ci['sigma_y'][0]:>8.4f}, {ci['sigma_y'][1]:>8.4f}]"
+        )
     print(
         f"\n→ Created: {out['proposed_setup_2']['dir']}"
         f"\n→ Written: {out['proposed_setup_2']['settings_xml']}"
