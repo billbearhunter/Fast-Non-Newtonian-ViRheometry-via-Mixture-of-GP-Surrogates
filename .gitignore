@@ -27,3 +27,9 @@ OptimizationResults/snapdiff_*/**/*.dat
 OptimizationResults/snapdiff_*/**/*.obj
 Simulation/results/**/*.dat
 Simulation/results/**/*.obj
+
+# γ̇ logger raw per-particle dumps (multi-MB per frame); keep summary JSONs only
+gamma_dot_runs/**/*.bin
+gamma_dot_runs/**/*.dat
+gamma_dot_runs/**/timing.json
+gamma_dot_runs/**/meta.txt
