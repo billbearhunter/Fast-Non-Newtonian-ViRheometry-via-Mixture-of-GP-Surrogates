@@ -54,7 +54,9 @@ def make_args(top_k: int, weight_mode: str) -> argparse.Namespace:
         # ---- loss ----
         loss_mode="log_nuisance_gp",
         sigma_bias=0.25, sigma_trend=0.20, sigma_y_min=5.0,
-        shape_gp_noise_log_floor=0.05,
+        shape_gp_noise_log_floor=0.20,    # production default (Occam-bias suppressor)
+        shape_disable_calib=True,         # production default (calib × low floor amplified bias)
+        shape_cma_restarts=1,             # paper-grade: pass 5 via CLI
         # ---- CMA-ES ----
         shape_sigma0=0.25, shape_max_iter=30, shape_popsize=12,
         shape_cma_seed_offset=0,

@@ -715,7 +715,7 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
         sup_arr = np.empty(len(members))
         for i, m in enumerate(members):
             y_hat, sig = _predict_one(z, m, ctx)
-            sig_calib = sig * m.calib_scale       # post-hoc GP variance calibration
+            sig_calib = sig if bool(getattr(args, "shape_disable_calib", True)) else sig * m.calib_scale       # post-hoc GP variance calibration
             losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, item["y_obs"], fw,
                                                        args.sigma_bias, args.sigma_trend,
                                                        sigma_obs_log)
@@ -858,7 +858,7 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         sup_arr = np.empty(len(members_list))
         for i, m in enumerate(members_list):
             y_hat, sig = _predict_one(z, m, ctx_)
-            sig_calib = sig * m.calib_scale
+            sig_calib = sig if bool(getattr(args, "shape_disable_calib", True)) else sig * m.calib_scale
             losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, y_obs_, fw_,
                                                        args.sigma_bias, args.sigma_trend,
                                                        sigma_obs_log)
@@ -1026,14 +1026,26 @@ def add_argparse_args(ap) -> None:
                          "oversample factor for the PCA pre-filter: routing "
                          "fetches K*factor candidates, then re-ranks.")
     # ---- loss ----
-    ap.add_argument("--shape-gp-noise-log-floor", type=float, default=0.05,
+    ap.add_argument("--shape-gp-noise-log-floor", type=float, default=0.20,
                     help="GP-aware likelihood: log-space measurement noise "
                          "floor σ_obs_log added in quadrature to delta-method "
                          "log-y std (σ_pred / y_hat). Used by "
-                         "--loss-mode=log_nuisance_gp. 0.05 ≈ 5%% relative "
-                         "noise floor; raise (0.10–0.20) if the GP is over-"
-                         "confident on real data and CMA-ES collapses into "
-                         "low-σ_pred regions.")
+                         "--loss-mode=log_nuisance_gp. Production default 0.20 "
+                         "(≈20%% relative floor) suppresses Occam-factor bias "
+                         "toward GP-training-dense regions, which empirically "
+                         "shifts CMA-ES away from rheometer truth on high-σ_y "
+                         "materials. Use 0.05 only with --shape-disable-calib "
+                         "for backward compat with pre-2026-05-07 results.")
+    import argparse as _argparse
+    ap.add_argument("--shape-disable-calib",
+                    action=_argparse.BooleanOptionalAction, default=True,
+                    help="Skip post-hoc GP variance calibration (treat "
+                         "calib_scale=1 regardless of .pt value). Production "
+                         "default is enabled (calib disabled): calib_scale × "
+                         "small noise floor amplifies Occam-factor bias and "
+                         "pushes the loss minimum away from rheometer truth. "
+                         "Use --no-shape-disable-calib to enable calib_scale "
+                         "(only meaningful with --shape-gp-noise-log-floor ≥ 0.20).")
     ap.add_argument("--shape-frame-w", type=float, nargs=8, default=None,
                     metavar=("F1","F2","F3","F4","F5","F6","F7","F8"),
                     help="Override per-frame loss weight (default "
