@@ -99,6 +99,61 @@ showing γ̇ on the (x, z) flow plane per frame, one row for each test
 material. Already have all the binary data needed — just wire up a
 matplotlib colourmap on the `_pos.bin` + `_gamma_dot.bin` files.
 
+### 1.6 Per-CMA-candidate γ̇ trace (老師 request)
+
+The 老師 in-meeting ask is: log γ̇ for **every** CMA-ES candidate, not
+just the final θ̂.  Counting:
+
+```
+Hamamichi (prior):  1 setup × popsize 7 × maxiter 100 × restarts 1 =  700 cand
+Ours paper-grade:   joint   × popsize 12 × maxiter 30 × restarts 5 = 1800 cand
+```
+
+(Confirmed empirically: all 5 Chuno-joint restarts hit the maxiter=30
+cap before tolfun convergence, so 1800 is the actual count.)
+
+Per-candidate MPM is ~5 s, so naively 1800 × 5 = 2.5 hr per inverse.
+Implemented two-stage architecture so the inverse stays GP-fast:
+
+**Stage 1 — log every CMA candidate to CSV during inverse:**
+
+```bash
+python scripts/run_y8q_prior.py --restarts 5 --joint-only \
+    --cma-trail-csv runs/cma_trail.csv --material Chuno
+```
+
+Adds zero extra cost to inverse (just append-to-CSV per generation).
+CSV schema: `inverse_id, restart, generation, candidate_idx, n, eta,
+sigma_y, z_n, z_log_eta, z_log_sigma_y, loss`.
+
+**Stage 2 — offline batched MPM γ̇ pass:**
+
+```bash
+# All candidates
+python scripts/dump_gamma_dot.py \
+    --trail-csv runs/cma_trail.csv \
+    --W 2.5 --H 2.7 \
+    --trail-out runs/cma_trail_gamma_dot.csv
+
+# Subsample (every 5th candidate)
+python scripts/dump_gamma_dot.py \
+    --trail-csv runs/cma_trail.csv \
+    --W 2.5 --H 2.7 \
+    --trail-filter "generation % 5 == 0" \
+    --trail-out runs/cma_trail_gamma_dot_subsampled.csv
+```
+
+The output CSV mirrors the input plus appended columns
+`gamma_dot_{med_overall, q05_overall, q95_overall, max_overall,
+med_peak_frame, med_peak_value}` per candidate.  MPM dumps are cached
+under `_mpm_cache/theta_<hash>/` so re-runs of an unchanged θ skip the
+compute.
+
+Smoke test (Chuno setup1, 5 candidates, max-frames 4): 23 s for 5
+MPM runs ≈ 4.6 s/row.  Batched 1800 candidates ≈ 2.3 hr per inverse,
+parallelisable across materials/setups by launching multiple processes
+with disjoint cache roots.
+
 ---
 
 ## 2. Bank-wide GP precision audit

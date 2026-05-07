@@ -64,7 +64,7 @@ def discover_materials(data_root: Path) -> dict[str, list[tuple[int, float, floa
     return out
 
 
-def make_args(restarts: int) -> argparse.Namespace:
+def make_args(restarts: int, trail_csv: str | None = None) -> argparse.Namespace:
     """Production-grade argset (matches scripts/run_y8q_chuno.make_args, paper-grade restarts)."""
     return argparse.Namespace(
         # routing / re-rank
@@ -80,6 +80,7 @@ def make_args(restarts: int) -> argparse.Namespace:
         shape_gp_noise_log_floor=0.20,
         shape_disable_calib=True,
         shape_cma_restarts=int(restarts),
+        shape_cma_trail_csv=trail_csv,
         # CMA-ES
         shape_sigma0=0.25, shape_max_iter=30, shape_popsize=12,
         shape_cma_seed_offset=0,
@@ -207,6 +208,11 @@ def main():
                     help="Skip setup1-alone and setup2-alone inverses; only run joint. "
                          "Saves ~50%% of batch wall-time (setup-alone diagnostics still "
                          "implicit in joint via routed sub_id + bbox).")
+    ap.add_argument("--cma-trail-csv", type=Path, default=None,
+                    help="If set, append every CMA-ES candidate (θ + loss + restart "
+                         "+ generation + candidate_idx) to this CSV.  Use later "
+                         "with scripts/dump_gamma_dot.py --trail-csv to compute γ̇ "
+                         "offline per candidate.")
     cli = ap.parse_args()
 
     V10.STATE_ROOT = cli.state_root.resolve()
@@ -220,9 +226,11 @@ def main():
             raise SystemExit(f"--material {cli.material!r} not found. Available: {available}")
         materials = {cli.material: materials[cli.material]}
 
-    args = make_args(cli.restarts)
+    args = make_args(cli.restarts, trail_csv=str(cli.cma_trail_csv) if cli.cma_trail_csv else None)
     print(f"\n{'='*72}\n=== Prior data y8q inverse  restarts={cli.restarts}  "
           f"materials={len(materials)} ===\n{'='*72}", flush=True)
+    if cli.cma_trail_csv:
+        print(f"CMA candidate trail → {cli.cma_trail_csv}", flush=True)
 
     summary: dict = {}
     t_global = time.time()

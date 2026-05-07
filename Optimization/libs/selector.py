@@ -324,7 +324,8 @@ def _hessian_ci(loss_fn, z_best, h_scale: np.ndarray, alpha: float = 0.05,
 # CMA-ES
 # ---------------------------------------------------------------------------
 
-def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
+def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7,
+              trail_writer=None, trail_restart_idx=0):
     """CMA-ES driver.
 
     loss_fn must accept either a single z (shape (3,)) returning a scalar,
@@ -332,22 +333,32 @@ def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
     1-D array of P losses.  We always pass the full popsize batch from
     `es.ask()` in a single call → batched GP forward via predict_full_batched
     amortises Python+CUDA launch overhead.  ~5-10× speedup over per-z calls.
+
+    trail_writer (optional): callable
+        ``(zs, losses, restart_idx, gen_idx) -> None``
+    invoked once per generation with all popsize candidates and their
+    losses.  Used to log every CMA candidate to a CSV for offline γ̇
+    analysis (see scripts/dump_gamma_dot.py --trail-csv).
     """
     opts = {"bounds": [list(lo), list(hi)], "popsize": popsize, "verbose": -9,
             "tolfun": 1e-6, "tolx": 1e-5, "maxiter": max_iter, "seed": seed}
     es = cma.CMAEvolutionStrategy(list(x0), float(sigma0), opts)
     n_evals = 0
+    gen_idx = 0
     while not es.stop():
         xs = es.ask()                                         # list of popsize np.ndarrays
         xs_arr = np.asarray(xs, dtype=np.float64)              # (popsize, 3)
         losses_arr = np.asarray(loss_fn(xs_arr)).ravel()       # (popsize,)
+        if trail_writer is not None:
+            trail_writer(xs_arr, losses_arr, trail_restart_idx, gen_idx)
         es.tell(xs, losses_arr.tolist())
         n_evals += len(xs)
+        gen_idx += 1
     return np.asarray(es.result.xbest, dtype=np.float64), float(es.result.fbest), n_evals
 
 
 def _run_cma_multistart(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12,
-                         base_seed=7, n_restarts=1):
+                         base_seed=7, n_restarts=1, trail_writer=None):
     """Multi-start CMA-ES (sequential).
 
     Earlier ThreadPoolExecutor variant deadlocked — likely due to gpytorch's
@@ -360,13 +371,15 @@ def _run_cma_multistart(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=1
     z_dispersion = None when n_restarts == 1.
     """
     if n_restarts <= 1:
-        z, l, n_ev = _run_cma(loss_fn, x0, lo, hi, sigma0, max_iter, popsize, base_seed)
+        z, l, n_ev = _run_cma(loss_fn, x0, lo, hi, sigma0, max_iter, popsize, base_seed,
+                               trail_writer=trail_writer, trail_restart_idx=0)
         return z, l, n_ev, None
     results = []
     total_evals = 0
     for k in range(n_restarts):
         z_k, l_k, n_k = _run_cma(loss_fn, x0, lo, hi, sigma0, max_iter, popsize,
-                                  base_seed + 100 * k)
+                                  base_seed + 100 * k,
+                                  trail_writer=trail_writer, trail_restart_idx=k)
         results.append((z_k, l_k))
         total_evals += n_k
     results.sort(key=lambda r: r[1])
@@ -374,6 +387,43 @@ def _run_cma_multistart(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=1
     z_arr = np.stack([r[0] for r in results])           # (n_restarts, 3)
     z_dispersion = z_arr.std(axis=0)
     return z_best, l_best, total_evals, z_dispersion
+
+
+def _make_trail_writer(csv_path, inverse_id: str, fb_lo, fb_hi):
+    """Build a CSV trail-writer callable.  Opens the file in append mode,
+    writes the header on first write, then one row per CMA candidate."""
+    import csv
+    csv_path = Path(csv_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not csv_path.exists() or csv_path.stat().st_size == 0
+    fh = open(csv_path, "a", newline="", encoding="utf-8")
+    w = csv.writer(fh)
+    if write_header:
+        w.writerow(["inverse_id", "restart", "generation", "candidate_idx",
+                    "n", "eta", "sigma_y", "z_n", "z_log_eta", "z_log_sigma_y",
+                    "loss"])
+
+    fb_lo = np.asarray(fb_lo, dtype=np.float64)
+    fb_hi = np.asarray(fb_hi, dtype=np.float64)
+
+    def writer(zs, losses, restart_idx: int, gen_idx: int):
+        # zs shape (popsize, 3), z = (n, log_eta, log_sigma_y).  Apply box
+        # clamp the same way the loss does so logged θ matches what the
+        # surrogate actually evaluated.
+        zs_clip = np.clip(zs, fb_lo, fb_hi)
+        for i in range(zs_clip.shape[0]):
+            z = zs_clip[i]
+            n_v = float(z[0])
+            eta_v = float(np.exp(z[1]))
+            sy_v = float(np.exp(z[2]))
+            w.writerow([inverse_id, restart_idx, gen_idx, i,
+                        f"{n_v:.6g}", f"{eta_v:.6g}", f"{sy_v:.6g}",
+                        f"{z[0]:.6g}", f"{z[1]:.6g}", f"{z[2]:.6g}",
+                        f"{float(losses[i]):.6g}"])
+        fh.flush()
+
+    writer._fh = fh   # keep alive; caller may close after inverse done
+    return writer
 
 
 # ---------------------------------------------------------------------------
@@ -761,6 +811,14 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
 
     t0 = time.time()
     n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
+    trail_csv = getattr(args, "shape_cma_trail_csv", None)
+    trail_writer = None
+    if trail_csv:
+        trail_writer = _make_trail_writer(
+            trail_csv,
+            inverse_id=f"{item['setup']}_K{len(members)}_single",
+            fb_lo=lo, fb_hi=hi,
+        )
     z_best, l_best, n_ev, z_disp = _run_cma_multistart(
         loss, x0, lo, hi,
         sigma0=getattr(args, "shape_sigma0", 0.25),
@@ -768,7 +826,10 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
         popsize=getattr(args, "shape_popsize", 12),
         base_seed=7 + primary.sub_id + int(getattr(args, "shape_cma_seed_offset", 0)),
         n_restarts=n_restarts,
+        trail_writer=trail_writer,
     )
+    if trail_writer is not None:
+        trail_writer._fh.close()
     theta = z_to_theta(z_best)
     # Plan E: pick the member whose forward GP best matches y_obs at z_best
     best_idx = 0
@@ -921,6 +982,14 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
 
     t0 = time.time()
     n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
+    trail_csv = getattr(args, "shape_cma_trail_csv", None)
+    trail_writer = None
+    if trail_csv:
+        trail_writer = _make_trail_writer(
+            trail_csv,
+            inverse_id=f"{item_a['setup']}+{item_b['setup']}_joint",
+            fb_lo=lo, fb_hi=hi,
+        )
     z_best, l_best, n_ev, z_disp = _run_cma_multistart(
         loss, x0, lo, hi,
         sigma0=getattr(args, "shape_sigma0", 0.25),
@@ -928,7 +997,10 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         popsize=getattr(args, "shape_popsize", 12),
         base_seed=7 + ma.sub_id * 100 + mb.sub_id,
         n_restarts=n_restarts,
+        trail_writer=trail_writer,
     )
+    if trail_writer is not None:
+        trail_writer._fh.close()
     theta = z_to_theta(z_best)
     # Plan E: pick best-fitting member per setup at z_best
     def _pick_best(members_list, ctx, y_obs):
@@ -1025,6 +1097,12 @@ def add_argparse_args(ap) -> None:
                          "large dispersion = loss landscape has multiple basins → "
                          "ridge-degeneracy diagnostic.  Default 1 = legacy single-start. "
                          "5 is a reasonable paper-grade choice (5× CMA cost).")
+    ap.add_argument("--shape-cma-trail-csv", type=str, default=None,
+                    help="If set, append every CMA-ES candidate (θ + loss + restart "
+                         "+ generation + candidate_idx) to this CSV.  Used by "
+                         "scripts/dump_gamma_dot.py --trail-csv to compute γ̇ "
+                         "offline per CMA candidate (老師 request: trace γ̇ "
+                         "trajectory through optimization).")
     # ---- inverse bbox ----
     ap.add_argument("--shape-box-pad", type=float, default=0.10,
                     help="z-space pad applied to sub training bbox before CMA-ES")
