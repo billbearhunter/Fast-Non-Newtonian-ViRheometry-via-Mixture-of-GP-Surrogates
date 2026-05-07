@@ -197,13 +197,28 @@ def main():
     ap.add_argument("--data-root", type=Path, default=None,
                     help="Root folder where proposed setup2 dir is created. "
                          "Default: same folder as <first-dir>")
-    ap.add_argument("--loss-mode", choices=["linear", "log_nuisance", "log_nuisance_gp", "mog_likelihood"], default="log_nuisance")
+    ap.add_argument("--loss-mode", choices=["log_nuisance_gp"], default="log_nuisance_gp",
+                    help="GP-aware Type-II ML likelihood (production). "
+                         "Old modes linear / log_nuisance / mog_likelihood "
+                         "archived 2026-05-07 — see "
+                         "docs/archive_2026-05-07/selector_full_2026-05-07.py.")
     ap.add_argument("--sigma-bias", type=float, default=0.25)
     ap.add_argument("--sigma-trend", type=float, default=0.20)
     ap.add_argument("--sigma-y-min", type=float, default=5.0)
     ap.add_argument("--inverse-mode", choices=["shape"], default="shape")
+    ap.add_argument("--legacy", action="store_true",
+                    help="Reserved for future re-introduction of archived "
+                         "legacy paths (Method A/B priors, σ_y two-stage "
+                         "prior, Hessian CI, info_frame_w, long_y8 "
+                         "spillover, etc.). Currently a no-op — code lives "
+                         "in docs/archive_2026-05-07/selector_full_2026-05-07.py.")
     SHA.add_argparse_args(ap)
     args = ap.parse_args()
+    if args.legacy:
+        print("[setup1] --legacy flag accepted (no-op). "
+              "Legacy code paths archived 2026-05-07; restore from "
+              "docs/archive_2026-05-07/selector_full_2026-05-07.py if needed.",
+              flush=True)
 
     V10.STATE_ROOT = args.state_root.resolve()
     out = estimate(args.first_dir.resolve(), args)

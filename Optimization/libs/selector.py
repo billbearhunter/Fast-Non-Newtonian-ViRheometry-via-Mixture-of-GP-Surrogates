@@ -47,28 +47,6 @@ FRAME_W_NP = np.array([0.2, 0.2, 0.35, 0.5, 0.8, 1.0, 1.4, 2.0], dtype=np.float6
 Z_SCALE_NP = np.array([0.20, 0.90, 1.20], dtype=np.float64)
 
 
-def _info_frame_w(member, z_ref: np.ndarray, ctx, h: float = 0.01) -> np.ndarray:
-    """Improvement (5): info-weighted frame loss.
-
-    Per-frame loss weight ∝ ‖∂y_i/∂z‖ at z_ref.  Frames where the surrogate
-    is sensitive to θ get more weight; frames that are flat (uninformative)
-    get less.  Computed via finite difference (3 extra GP forward calls,
-    sub-millisecond cost).  Returns 8-vector normalised so that sum=8 to
-    keep the loss scale comparable to the legacy fixed weights.
-    """
-    y0, _ = _predict_one(z_ref, member, ctx)
-    J = np.zeros((8, 3))
-    for d in range(3):
-        zp = z_ref.copy()
-        zp[d] += h
-        yp, _ = _predict_one(zp, member, ctx)
-        J[:, d] = (yp - y0) / h
-    sens = np.linalg.norm(J, axis=1)
-    # Avoid zero weights — floor at 5% of max sensitivity
-    sens = np.maximum(sens, 0.05 * sens.max())
-    return sens / sens.sum() * 8.0  # normalise so sum=8 (same as legacy)
-
-
 def _resolve_frame_w(args) -> np.ndarray:
     """Return per-frame weights honoring --shape-frame-w override.
 
@@ -142,6 +120,10 @@ class SubMember:
     # legacy fields some helpers expect
     p_basin: float = 1.0
     meta: dict = field(default_factory=dict)
+    # Y_8 quantile criterion: median + std of training y[7] distribution.
+    # Used by gp_fit_y8_quantile re-rank to score |y_obs[7] - y8_med| / y8_std.
+    y8_med: float = 0.0
+    y8_std: float = 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +174,11 @@ def _build_sub_member(sd: Path, sub_id: int, bin_id: int, y_obs: np.ndarray,
     Y_phys = np.asarray(ck["Y_phys"], dtype=np.float64)
     z_mu, z_lo, z_hi, z_scale = _z_bbox_from_X(X_phys)
     z_nn = _z_nn_to_y(X_phys, Y_phys, y_obs)
+    # Y_8 quantile statistics for sub-level routing (gp_fit_y8_quantile mode).
+    y8_arr = Y_phys[:, 7] if Y_phys.shape[1] >= 8 else np.array([1.0])
+    y8_med = float(np.median(y8_arr)) if y8_arr.size > 0 else 1.0
+    y8_std = float(np.std(y8_arr, ddof=1)) if y8_arr.size > 1 else 1.0
+    y8_std = max(y8_std, 0.1)  # floor to avoid divide-by-zero on degenerate subs
     val_rwrms = float(ck.get("val_rel_wrms_median", 0.0))
     val_p90 = float(ck.get("val_rel_wrms_p90", 0.0))
     n_val = int(ck.get("n_val", 0))
@@ -212,27 +199,13 @@ def _build_sub_member(sd: Path, sub_id: int, bin_id: int, y_obs: np.ndarray,
         meta={"sub_id": int(sub_id), "bin_id": int(bin_id),
               "trust_score": trust, "mu_z": z_mu,
               "cov_z": np.diag(z_scale ** 2), "pi": 1.0},
+        y8_med=y8_med, y8_std=y8_std,
     )
 
 
 # ---------------------------------------------------------------------------
 # Loss
 # ---------------------------------------------------------------------------
-
-def _setup_loss_log_nuisance_np(y_hat, y_obs, frame_w, sigma_bias, sigma_trend) -> float:
-    eps = 1e-9
-    r = np.log(np.clip(y_hat, eps, None)) - np.log(np.clip(y_obs, eps, None))
-    n = y_hat.size
-    t = np.linspace(-1.0, 1.0, n)
-    X = np.stack([np.ones_like(t), t], axis=1)
-    w = frame_w * frame_w
-    WX = X * w[:, None]
-    A = X.T @ WX + np.diag([1.0 / sigma_bias ** 2, 1.0 / sigma_trend ** 2])
-    b = X.T @ (w * r)
-    gamma = np.linalg.solve(A, b)
-    resid = r - X @ gamma
-    return float(np.mean(w * resid * resid))
-
 
 def _setup_loss_log_nuisance_gp_np(y_hat, sigma_pred, y_obs, frame_w,
                                      sigma_bias, sigma_trend, sigma_obs_log) -> float:
@@ -274,66 +247,9 @@ def _setup_loss_log_nuisance_gp_np(y_hat, sigma_pred, y_obs, frame_w,
     return nll / n
 
 
-def _setup_loss_linear_np(y_hat, y_obs, frame_w) -> float:
-    scale = max(float(np.mean((y_obs * frame_w) ** 2)), 1e-9)
-    err = (y_hat - y_obs) * frame_w
-    return float(np.mean(err * err) / scale)
-
-
 def _predict_one(z, member, ctx):
     y, s = predict_full_batched(member, [z], ctx)
     return y[0], s[0]
-
-
-def _gaussian_prior(z, member: SubMember) -> float:
-    """Method A: per-sub Gaussian prior centered at sub's training mean.
-
-    Returns ½ ‖(z − z_mu) / z_scale‖² (negative log-density of N(z_mu,
-    diag(z_scale²)) up to constant).  Used as a soft anchor pulling z
-    toward the sub's training centroid.  When summed over ensemble
-    members with their weights wᵢ, the sum is equivalent to a single
-    Gaussian prior centered at the precision-weighted mean of all
-    z_mu_i, with covariance (Σᵢ wᵢ Λᵢ⁻¹)⁻¹.
-    """
-    return float(0.5 * np.sum(((z - member.z_mu) / member.z_scale) ** 2))
-
-
-def _mog_prior_neg_log(z, members, weights) -> float:
-    """Method B: Mixture-of-Gaussians prior — Bayesian marginalisation
-    over the routed cluster ensemble.
-
-        −log p(z) = − log Σ_k π_k · 𝒩(z; μ_k, diag(σ_k²))
-                  = − logsumexp_k [log π_k − ½‖(z−μ_k)/σ_k‖² − Σ_j log σ_kj]
-                  (up to z-independent constant ½ d log 2π)
-
-    π_k are taken to be the routing ensemble weights (data-driven
-    cluster posterior).  Compared to Method A's weighted-average
-    quadratic prior, the logsumexp lets one cluster *dominate softly*
-    when z is near its mode while never zeroing out the others.
-
-    Why MoG is more honest than Method A's mean-anchor:
-      * Top-K routing may include wrong clusters; under Method A every
-        member contributes a quadratic pull (weighted average).  Under
-        MoG, far-away wrong clusters receive vanishing posterior
-        responsibility automatically (their term drops out of the
-        logsumexp), so the prior is robust to routing errors.
-      * Eliminates the two-stage "pick K then prior" — there is just
-        one Bayes prior with cluster-membership marginalised out.
-      * For y_obs near a cluster boundary (between two centroids), the
-        MoG smoothly interpolates between modes; Method A's
-        weighted-average centroid would land in a low-density valley.
-    """
-    log_pi = np.log(np.maximum(np.asarray(weights, dtype=np.float64), 1e-12))
-    z_arr = np.asarray(z, dtype=np.float64)
-    log_terms = np.empty(len(members), dtype=np.float64)
-    for i, (m, lp) in enumerate(zip(members, log_pi)):
-        d = (z_arr - m.z_mu) / m.z_scale
-        mahala = 0.5 * float(np.dot(d, d))
-        log_norm = float(np.sum(np.log(m.z_scale)))   # ½ log det Σ_k
-        log_terms[i] = lp - mahala - log_norm
-    mx = float(log_terms.max())
-    log_p = mx + float(np.log(np.sum(np.exp(log_terms - mx))))
-    return -log_p
 
 
 def _support_penalty(z, member: SubMember) -> float:
@@ -343,35 +259,18 @@ def _support_penalty(z, member: SubMember) -> float:
 
 
 def _hessian_ci(loss_fn, z_best, h_scale: np.ndarray, alpha: float = 0.05,
-                  h_factor: float = 0.10, min_eig_frac: float = 1e-3):
-    """Method C: Laplace-approx 95% CI from numerical Hessian at MAP.
+                  h_factor: float = 0.10, min_eig_frac: float = 1e-2):
+    """Laplace-approx 95 % CI from numerical Hessian at MAP (Type-II ML posterior).
 
-    Approximates the posterior near z_best as N(z_best, H⁻¹) where
-    H = ∇²(−log p(z|y)).  CI is computed by central differences with
-    step h_i = h_factor · z_scale_i.  The exp-link transform z → θ for
-    (η, σ_y) maps Gaussian-on-z to log-normal-on-θ; CI bounds are
-    obtained by transforming the z-bounds.
-
-    Numerical safeguards:
-      * Symmetrise H = ½ (H + Hᵀ).
-      * Eigenvalues below `min_eig_frac · max|eval|` (or below 0) are
-        replaced by that floor — represents an under-identified
-        direction with a wide-but-finite CI.  Without this floor a
-        single non-positive eigenvalue (from CMA-ES not converging
-        exactly to the local minimum, or from the support-penalty kink
-        if z_best is near the bbox) would explode the covariance to
-        machine-infinity.
-      * CI bounds are intersected with a sane physical range
-        (n ∈ [0, 1], log η ∈ [-3, 6], log σ_y ∈ [0, 7]) to avoid
-        nonsense outputs when the data alone cannot identify a
-        direction.
+    Approximates posterior near z_best as N(z_best, H⁻¹) with
+    H = ∇²(−log p(z|y)).  Central differences with step h_i = h_factor · z_scale_i.
 
     Returns
     -------
-    z_std : np.ndarray (3,)
-        Posterior std on z (sqrt of H⁻¹ diag).
-    theta_ci : list[(lo, hi)] length 3 — 95 % CI on θ.
-    H : np.ndarray (3, 3) — the symmetrised Hessian.
+    z_std :    (3,) sqrt of H⁻¹ diag in z-space.
+    theta_ci : list[(lo, hi)] length 3 — 95 % CI on (n, η, σ_y) (exp-link transform).
+    flags :    list[bool] length 3 — True when direction is well-identified
+               (eigenvalue at floor → False = under-identified).
     """
     z_best = np.asarray(z_best, dtype=np.float64)
     n = z_best.size
@@ -380,9 +279,7 @@ def _hessian_ci(loss_fn, z_best, h_scale: np.ndarray, alpha: float = 0.05,
     H = np.zeros((n, n), dtype=np.float64)
     for i in range(n):
         ei = np.zeros(n); ei[i] = h[i]
-        f_pi = loss_fn(z_best + ei)
-        f_mi = loss_fn(z_best - ei)
-        H[i, i] = (f_pi + f_mi - 2.0 * f0) / (h[i] * h[i])
+        H[i, i] = (loss_fn(z_best + ei) + loss_fn(z_best - ei) - 2.0 * f0) / (h[i] * h[i])
     for i in range(n):
         for j in range(i + 1, n):
             ei = np.zeros(n); ei[i] = h[i]
@@ -395,35 +292,32 @@ def _hessian_ci(loss_fn, z_best, h_scale: np.ndarray, alpha: float = 0.05,
             H[i, j] = H[j, i] = v
     H = 0.5 * (H + H.T)
     z_std = np.full(n, float("nan"))
-    evals_out = np.zeros(n)
+    flags = [True] * n
     try:
         evals, evecs = np.linalg.eigh(H)
-        evals_out = evals.copy()
-        # robust positive-definite floor: keep at least min_eig_frac × max
         max_eig = float(np.abs(evals).max())
         floor_eig = max(min_eig_frac * max(max_eig, 1.0), 1e-6)
-        evals_pd = np.where(evals < floor_eig, floor_eig, evals)
+        below_floor = evals < floor_eig
+        evals_pd = np.where(below_floor, floor_eig, evals)
         cov = (evecs / evals_pd) @ evecs.T
         diag = np.clip(np.diag(cov), 0.0, None)
         z_std = np.sqrt(diag)
+        # Per-dim identifiability: direction i is under-identified if its
+        # dominant eigenvector mode hit the floor.  Project: dim_to_mode =
+        # |evecs|² (each row is a dim; sum over modes weights its support).
+        dim_floor_weight = (evecs ** 2) @ below_floor.astype(np.float64)
+        flags = [bool(w < 0.5) for w in dim_floor_weight]
     except np.linalg.LinAlgError:
         pass
-    from scipy.stats import norm
-    z_q = float(norm.ppf(1.0 - alpha / 2.0))
-    z_lo = z_best - z_q * z_std
-    z_hi = z_best + z_q * z_std
-    # Clamp to physical box so the report is interpretable when a direction
-    # is genuinely under-identified by the data alone.
-    z_box_lo = np.array([0.0, -3.0, 0.0])
-    z_box_hi = np.array([1.0,  6.0, 7.0])
-    z_lo_c = np.maximum(z_lo, z_box_lo)
-    z_hi_c = np.minimum(z_hi, z_box_hi)
+    z_q = 1.96
+    z_lo_c = np.maximum(z_best - z_q * z_std, np.array([0.0, -3.0, 0.0]))
+    z_hi_c = np.minimum(z_best + z_q * z_std, np.array([1.0,  6.0, 7.0]))
     theta_ci = [
         (float(z_lo_c[0]), float(z_hi_c[0])),                    # n
         (float(np.exp(z_lo_c[1])), float(np.exp(z_hi_c[1]))),    # η
         (float(np.exp(z_lo_c[2])), float(np.exp(z_hi_c[2]))),    # σ_y
     ]
-    return z_std, theta_ci, H
+    return z_std, theta_ci, flags
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +337,33 @@ def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
     return np.asarray(es.result.xbest, dtype=np.float64), float(es.result.fbest), n_evals
 
 
+def _run_cma_multistart(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12,
+                         base_seed=7, n_restarts=1):
+    """Multi-start CMA-ES.  Run `n_restarts` times with seeds [base_seed, base_seed+100, ...],
+    return best result + theta dispersion across restarts (truth-blind ridge-degeneracy
+    diagnostic: large dispersion = loss landscape has multiple basins, ML estimate
+    not unique).
+
+    n_restarts=1 = legacy single-start (no overhead).  n_restarts>1 multiplies CMA cost
+    proportionally; dispersion array is None when n_restarts==1.
+    """
+    if n_restarts <= 1:
+        z, l, n_ev = _run_cma(loss_fn, x0, lo, hi, sigma0, max_iter, popsize, base_seed)
+        return z, l, n_ev, None
+    results = []
+    total_evals = 0
+    for k in range(n_restarts):
+        z_k, l_k, n_k = _run_cma(loss_fn, x0, lo, hi, sigma0, max_iter, popsize,
+                                  base_seed + 100 * k)
+        results.append((z_k, l_k))
+        total_evals += n_k
+    results.sort(key=lambda r: r[1])
+    z_best, l_best = results[0]
+    z_arr = np.stack([r[0] for r in results])           # (n_restarts, 3) z-space
+    z_dispersion = z_arr.std(axis=0)                    # 3 — std over restarts
+    return z_best, l_best, total_evals, z_dispersion
+
+
 # ---------------------------------------------------------------------------
 # Public entry points
 # ---------------------------------------------------------------------------
@@ -451,9 +372,20 @@ def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
 # Flat KMeans routing (partition_type='flat_kmeans_separate')
 # ---------------------------------------------------------------------------
 
-def _norm_curve_one(y_obs: np.ndarray) -> np.ndarray:
-    """(8,) → (7,): subtract frame-1, divide by frame-8."""
-    y1 = y_obs[0]
+def _norm_curve_one(y_obs: np.ndarray, nc_version: str = "v1") -> np.ndarray:
+    """(8,) → (7,) shape descriptor.
+
+    v1 (legacy):     (Y[1:8] - Y[0]) / Y[7]                — subtract frame1, scale by frame8
+    v2 (range-norm): (Y[1:8] - Y[0]) / (Y[7] - Y[0])      — affine-invariant, sim-real robust
+
+    The version is chosen by state["nc_version"] in callers; defaults to v1
+    when missing for backward compatibility with old state.pkl files.
+    """
+    y1 = float(y_obs[0])
+    if nc_version == "v2":
+        span = max(float(y_obs[7]) - y1, 1e-6)
+        return (y_obs[1:8] - y1) / span
+    # v1 (default)
     y8 = max(float(y_obs[7]), 1e-6)
     return (y_obs[1:8] - y1) / y8
 
@@ -464,7 +396,8 @@ def _project_flat(y_obs: np.ndarray, state: dict) -> np.ndarray:
     Separate PCA (pca.n_features_in_==7):  [log_y8_s*w, pc1, pc2, pc3]  (4D)
     Joint   PCA (pca.n_features_in_==8):   pca([log_y8_s*w, nc_1..7])   (4D)
     """
-    nc   = _norm_curve_one(y_obs)                                  # (7,)
+    nc_version = state.get("nc_version", "v1")
+    nc   = _norm_curve_one(y_obs, nc_version=nc_version)           # (7,)
     sc_nc = state["flat_scaler_nc"]
     pca   = state["flat_pca"]
     sc_y8 = state["flat_scaler_y8"]
@@ -662,13 +595,12 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
     #           1 GP forward).  For oversample=3 this adds at most ~1 s
     #           of routing time, dominated by sub-loading I/O.
     over_factor = int(getattr(args, "shape_gpfit_oversample", 3))
-    fetch_k = top_k * over_factor if weight_mode in ("gp_fit", "inv_var") else top_k
+    fetch_k = top_k * over_factor if weight_mode in ("gp_fit", "gp_fit_y8_quantile") else top_k
     eps_cap = bool(getattr(args, "shape_eps_cap_by_primary", False))
     cands = _route_topk_subs(y_obs, state, fetch_k, mode=l2_mode, eps_cm=eps_cm,
                               eps_cap_by_primary=eps_cap)
     if not cands:
         if state.get("partition_type") == "flat_kmeans_separate":
-            # Flat fallback: just use the single nearest cluster's first sub
             cands = _route_flat_kmeans(y_obs, state, 1)
         else:
             bin_id, sub_id = route_y_to_sub(y_obs, state)
@@ -680,132 +612,45 @@ def prepare_setup_shape(setup_name, W, H, y_obs, geo_router, xs, ys,
             m = _build_sub_member(sd, sub_id, bin_id, y_obs, xs, ys, device, dtype)
             over_members.append(m); over_pca_dists.append(d)
         except FileNotFoundError:
-            continue  # skip missing experts
+            continue
 
-    if weight_mode == "gp_fit":
-        # Score every oversampled candidate by GP-fit at its own z_nn and
-        # keep the K best.  Then derive softmax weights from the same scores.
-        fit_dists = []
-        for m in over_members:
-            y_pred, _ = _predict_one(m.z_nn, m, ctx)
-            fit_dists.append(float(np.linalg.norm(y_pred - y_obs)))
+    if weight_mode == "gp_fit_y8_quantile":
+        # Y_8 quantile criterion (Bayes-evidence-like sub selection).
+        # Score = |y_obs[7] - y8_med_k| / y8_std_k.  Picks the sub for which
+        # y_obs[7] is most "typical" (central in training Y_8 distribution).
+        # Relies on cluster-level routing already filtering shape match.
+        y_obs_y8 = float(y_obs[7])
+        fit_dists = [abs(y_obs_y8 - m.y8_med) / max(m.y8_std, 1e-6)
+                     for m in over_members]
         order = np.argsort(np.asarray(fit_dists))
         keep = order[:max(1, top_k)]
         members = [over_members[i] for i in keep]
         d_kept = np.asarray([fit_dists[i] for i in keep], dtype=np.float64)
-    elif weight_mode == "inv_var":
-        # Improvement (1) — BLUE inverse-variance weighting.
-        # Each sub's GP returns a frame-wise predictive σ at z_nn; aggregate
-        # to a scalar σ_total² and weight ∝ 1/σ_total².  Selects top-K by
-        # smallest σ_total² (most-confident GPs at z_nn) and uses the same
-        # scores as multiplicative weights (NO softmax — true BLUE).
-        # Theory: weighted least squares with inverse-variance weights is
-        # the minimum-variance unbiased linear estimator (Gauss-Markov).
-        sigma_totals = []
+    elif weight_mode == "gp_fit":
+        # Legacy ranking: ||GP(z_nn) - y_obs|| in raw y-space.  Kept for
+        # A/B comparison against gp_fit_y8_quantile.
+        fit_dists = []
         for m in over_members:
-            _, sigma = _predict_one(m.z_nn, m, ctx)
-            # Apply per-sub calibration scalar so σ_eff ≈ actual RMSE.
-            # calib_scale=1.0 when checkpoint pre-dates calibrate_subs.py.
-            sigma_eff = np.asarray(sigma) * m.calib_scale
-            sigma_totals.append(float(np.sqrt(np.mean(sigma_eff ** 2))))
-        sig_arr = np.asarray(sigma_totals, dtype=np.float64)
-        order = np.argsort(sig_arr)  # ascending: smallest sigma first
+            y_pred, _ = _predict_one(m.z_nn, m, ctx)
+            fit_dists.append(float(np.linalg.norm(y_pred - np.asarray(y_obs, dtype=np.float64))))
+        order = np.argsort(np.asarray(fit_dists))
         keep = order[:max(1, top_k)]
         members = [over_members[i] for i in keep]
-        sig_kept = sig_arr[keep]
-        # BLUE weights = (1/σ²) / Σ(1/σ²)
-        inv_var = 1.0 / np.maximum(sig_kept ** 2, 1e-12)
-        d_kept = sig_kept  # informational only (for downstream callers)
+        d_kept = np.asarray([fit_dists[i] for i in keep], dtype=np.float64)
     elif weight_mode == "pca":
         members = over_members[:max(1, top_k)]
         d_kept = np.asarray(over_pca_dists[:max(1, top_k)], dtype=np.float64)
     else:
         raise ValueError(f"unknown --shape-weight-mode={weight_mode}")
 
-    if weight_mode == "inv_var" and len(members) > 1:
-        ws = inv_var / inv_var.sum()
-    elif len(members) > 1:
+    if len(members) > 1:
         tau = float(getattr(args, "shape_topk_softmax_tau", 1.5))
         ws = np.exp(-(d_kept - d_kept.min()) / max(tau, 1e-3))
         ws = ws / ws.sum()
     else:
         ws = np.array([1.0])
 
-    # σ_y split equal-weight (flat partition only).
-    # Each cluster's σ_y range is quantile-split into 1-4 sub-experts
-    # (low/mid/high σ_y bins).  When multiple subs from the same cluster
-    # appear in the ensemble, they are different σ_y bins of the same
-    # (length, shape) regime → force them equal-weighted to remove the
-    # bias from gp_fit / pca / inv_var weighting that would otherwise
-    # favour whichever σ_y bin happens to fit y_obs at z_nn best.  The
-    # cluster's overall ensemble weight (sum across its sub-bins) is
-    # preserved; only the internal split is equalised.
-    if (bool(getattr(args, "shape_sy_split_equal_weight", False))
-            and state.get("partition_type") == "flat_kmeans_separate"
-            and len(members) > 1):
-        from collections import defaultdict
-        by_cluster = defaultdict(list)
-        for i, m in enumerate(members):
-            by_cluster[int(m.bin_id)].append(i)
-        for ci, idxs in by_cluster.items():
-            if len(idxs) >= 2:
-                cluster_total = float(sum(ws[i] for i in idxs))
-                share = cluster_total / len(idxs)
-                for i in idxs:
-                    ws[i] = share
-        s = ws.sum()
-        if s > 0:
-            ws = ws / s
-    # Long-y8 spillover (flat partition only). Force-add a "long-flow"
-    # cluster's σ_y-low sub to the ensemble to recover OLD length-bin's
-    # bin_4 → bin_3 spillover effect: low-σ_y physical constraint pulled
-    # in for boundary-y8 queries (e.g. Chuno y8=5.32 → bring in cluster 5
-    # y8≈8 σ_y_low sub to anchor σ_y down).
-    long_y8_factor = float(getattr(args, "shape_long_y8_spillover_factor", 0.0))
-    if (long_y8_factor > 0
-            and state.get("partition_type") == "flat_kmeans_separate"
-            and y_obs is not None):
-        y8_query = float(y_obs[7])
-        threshold = float(getattr(args, "shape_long_y8_spillover_ratio", 1.5)) * y8_query
-        # Cache cluster y8 medians (load each cluster's first sub's training y8)
-        if "_cluster_y8_med_cache" not in state:
-            cache = []
-            for cluster in state["flat_clusters"]:
-                first_sid = int(cluster["subs"][0]["sub_id"])
-                p = sd / "experts" / f"sub_{first_sid:04d}.pt"
-                try:
-                    ck = torch.load(p, weights_only=False, map_location="cpu")
-                    cache.append(float(np.median(np.asarray(ck["Y_phys"])[:, 7])))
-                except FileNotFoundError:
-                    cache.append(0.0)
-            state["_cluster_y8_med_cache"] = cache
-        cluster_y8_meds = state["_cluster_y8_med_cache"]
-        used = {int(m.bin_id) for m in members}
-        candidates = [ci for ci, y8m in enumerate(cluster_y8_meds)
-                       if y8m > threshold and ci not in used]
-        if candidates:
-            # Pick the nearest long-y8 cluster (smallest centroid distance)
-            from Optimization.libs.selector import _project_flat as _proj
-            feat = _proj(y_obs, state)
-            centroids = np.asarray(state["flat_centroids"])
-            cdists = [float(np.linalg.norm(centroids[ci] - feat)) for ci in candidates]
-            ci_pick = candidates[int(np.argmin(cdists))]
-            # Pick its σ_y-low sub (subs are stored in σ_y bin order, [0]=lowest)
-            cluster = state["flat_clusters"][ci_pick]
-            sid_pick = int(cluster["subs"][0]["sub_id"])
-            try:
-                m_extra = _build_sub_member(sd, sid_pick, ci_pick, y_obs, xs, ys, device, dtype)
-                members.append(m_extra)
-                ws_new = np.append(ws, long_y8_factor)
-                ws_new = ws_new / ws_new.sum()
-                ws = ws_new
-            except FileNotFoundError:
-                pass
-    # Resolve frame weights: legacy override or info-weighted (improvement 5)
-    if bool(getattr(args, "shape_info_frame_w", False)) and len(members) >= 1:
-        frame_w_used = _info_frame_w(members[0], members[0].z_nn, ctx)
-    else:
-        frame_w_used = _resolve_frame_w(args)
+    frame_w_used = _resolve_frame_w(args)
     return {
         "setup": setup_name, "W": W, "H": H, "y_obs": y_obs,
         "gid": gid, "state_dir": sd,
@@ -845,17 +690,10 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     if args.sigma_y_min > 0:
         fb_lo[2] = max(fb_lo[2], float(np.log(args.sigma_y_min)))
     pad = float(getattr(args, "shape_box_pad", 0.10))
-    # Plan E: when top-K > 1, expand bbox to UNION of all members (so CMA
-    # can search across all candidate subs)
+    # Plan E: when top-K > 1, expand bbox to UNION of all members.
     z_lo_union = np.min(np.stack([m.z_lo for m in members]), axis=0)
     z_hi_union = np.max(np.stack([m.z_hi for m in members]), axis=0)
-    # Improvement (6): use per-sub z_scale (training-data std per dim) instead
-    # of fixed Z_SCALE_NP for bbox padding.  union over members' z_scale gives
-    # a width adaptive to the routed subs (wider when subs span more variance).
-    if bool(getattr(args, "shape_per_sub_z_scale", False)):
-        zs_pad = np.max(np.stack([m.z_scale for m in members]), axis=0)
-    else:
-        zs_pad = Z_SCALE_NP
+    zs_pad = Z_SCALE_NP
     lo = np.maximum(z_lo_union - pad * zs_pad, fb_lo)
     hi = np.minimum(z_hi_union + pad * zs_pad, fb_hi)
     # Guard: sigma_y_min floor can push lo[2] above hi[2] for lo-half subs
@@ -865,94 +703,45 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     x0 = np.maximum(np.minimum(primary.z_nn, hi - 1e-3), lo + 1e-3)
 
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
-    loss_mode = args.loss_mode
-
-    # Plan C: σY-prior for single mode, anchored at the sub-training nearest
-    # neighbour to y_obs (member.z_nn) rather than the sub bbox mean
-    # (member.z_mu).  z_nn answers "what σY produced data most similar to
-    # y_obs?" — much more informative than the bbox centroid.
-    sy_prior_w_single = float(getattr(args, "shape_sy_prior_single_weight", 0.0))
-    sy_anchor_mode = str(getattr(args, "shape_sy_prior_single_anchor", "z_nn"))
-    log_sy_anchor_single = None
-    log_sy_prior_std_single = 0.5
-    if sy_prior_w_single > 0:
-        if sy_anchor_mode == "z_mu":
-            log_sy_anchor_single = float(primary.z_mu[2])
-        else:
-            log_sy_anchor_single = float(primary.z_nn[2])
-        log_sy_prior_std_single = max(
-            float((primary.z_hi[2] - primary.z_lo[2]) / 4.0),
-            float(getattr(args, "shape_sy_prior_min_std", 0.4)),
-        )
-
     fw = item.get("frame_w", FRAME_W_NP)
-    use_mog = (loss_mode == "mog_likelihood")
-    sigma_obs = float(getattr(args, "shape_mog_sigma_obs", 0.05))
     sigma_obs_log = float(getattr(args, "shape_gp_noise_log_floor", 0.05))
-    log_priors = np.log(np.maximum(weights, 1e-12))
-    # Method A: per-sub Gaussian prior weight (default 0 = off; 1.0 = MAP)
-    gauss_w = float(getattr(args, "shape_gaussian_prior_weight", 0.0))
-    # Method B: Mixture-of-Gaussians prior weight (default 0 = off; 1.0 = MAP)
-    mog_pri_w = float(getattr(args, "shape_mog_prior_weight", 0.0))
+
+    n_frames = float(len(item["y_obs"]))
+    log_w = np.log(np.maximum(weights, 1e-12))
+
     def loss(z):
-        if use_mog:
-            # Bayesian Mixture-of-GPs negative log marginal likelihood.
-            #   p(y|z) = Σᵢ wᵢ · 𝒩(y; μᵢ(z), σᵢ²(z) + σ_obs²)
-            #   loss   = −logsumexp_i [log wᵢ + log 𝒩_i]
-            # frame_w used to scale per-frame contributions inside log 𝒩.
-            log_lls = []
-            sup_total = 0.0
-            for m, w_log in zip(members, log_priors):
-                y_hat, sigma = _predict_one(z, m, ctx)
-                var = np.asarray(sigma) ** 2 + sigma_obs ** 2  # (8,)
-                resid2 = (y_hat - item["y_obs"]) ** 2
-                # frame_w weights the diagonal Mahalanobis distance (still a
-                # valid log-likelihood up to constant since fw acts like an
-                # additional precision multiplier per frame)
-                ll = -0.5 * np.sum(fw * (resid2 / var)) - 0.5 * np.sum(np.log(var))
-                log_lls.append(w_log + ll)
-                sup_total += float(np.exp(w_log)) * _support_penalty(z, m)
-            log_lls_arr = np.asarray(log_lls)
-            mx = float(log_lls_arr.max())
-            log_p = mx + float(np.log(np.sum(np.exp(log_lls_arr - mx))))
-            prior = 0.0
-            if log_sy_anchor_single is not None:
-                prior = sy_prior_w_single * ((z[2] - log_sy_anchor_single) / log_sy_prior_std_single) ** 2
-            gp_total = sum(float(np.exp(w_log)) * _gaussian_prior(z, m)
-                            for m, w_log in zip(members, log_priors))
-            mog_pri = _mog_prior_neg_log(z, members, weights) if mog_pri_w > 0 else 0.0
-            return -log_p + sup_w * sup_total + gauss_w * gp_total + mog_pri_w * mog_pri + prior
-        # Legacy paths (linear / log_nuisance / log_nuisance_gp) below
-        l_total = 0.0
-        sup_total = 0.0
-        gp_total = 0.0  # Method A: weighted Gaussian prior across ensemble
-        for m, w in zip(members, weights):
+        # Compute per-member NLL (= -log p_m(y|θ) / n_frames) and support penalty.
+        losses = np.empty(len(members))
+        sup_arr = np.empty(len(members))
+        for i, m in enumerate(members):
             y_hat, sig = _predict_one(z, m, ctx)
-            if loss_mode == "log_nuisance_gp":
-                lk = _setup_loss_log_nuisance_gp_np(y_hat, sig, item["y_obs"], fw,
-                                                     args.sigma_bias, args.sigma_trend,
-                                                     sigma_obs_log)
-            elif loss_mode == "log_nuisance":
-                lk = _setup_loss_log_nuisance_np(y_hat, item["y_obs"], fw,
-                                                  args.sigma_bias, args.sigma_trend)
-            else:
-                lk = _setup_loss_linear_np(y_hat, item["y_obs"], fw)
-            l_total += float(w) * lk
-            sup_total += float(w) * _support_penalty(z, m)
-            gp_total += float(w) * _gaussian_prior(z, m)
-        prior = 0.0
-        if log_sy_anchor_single is not None:
-            prior = sy_prior_w_single * ((z[2] - log_sy_anchor_single) / log_sy_prior_std_single) ** 2
-        mog_pri = _mog_prior_neg_log(z, members, weights) if mog_pri_w > 0 else 0.0
-        return l_total + sup_w * sup_total + gauss_w * gp_total + mog_pri_w * mog_pri + prior
+            sig_calib = sig * m.calib_scale       # post-hoc GP variance calibration
+            losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, item["y_obs"], fw,
+                                                       args.sigma_bias, args.sigma_trend,
+                                                       sigma_obs_log)
+            sup_arr[i] = _support_penalty(z, m)
+        # Bayes-correct mixture marginal NLL (Method-B-style logsumexp):
+        #   −log Σ_m π_m p_m(y|θ) = −logsumexp_m [ log π_m + log p_m(y|θ) ]
+        # log p_m(y|θ) = −losses[m] · n_frames (un-normalize from per-frame avg).
+        # K=1: collapses to losses[0]; this branch is taken in production y8q.
+        if len(members) == 1:
+            l_total = float(losses[0])
+        else:
+            log_terms = log_w - losses * n_frames
+            mx = float(log_terms.max())
+            l_total = -(mx + float(np.log(np.sum(np.exp(log_terms - mx))))) / n_frames
+        sup_total = float(np.dot(weights, sup_arr))
+        return l_total + sup_w * sup_total
 
     t0 = time.time()
-    z_best, l_best, n_ev = _run_cma(
+    n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
+    z_best, l_best, n_ev, z_disp = _run_cma_multistart(
         loss, x0, lo, hi,
         sigma0=getattr(args, "shape_sigma0", 0.25),
         max_iter=getattr(args, "shape_max_iter", 30),
         popsize=getattr(args, "shape_popsize", 12),
-        seed=7 + primary.sub_id + int(getattr(args, "shape_cma_seed_offset", 0)),
+        base_seed=7 + primary.sub_id + int(getattr(args, "shape_cma_seed_offset", 0)),
+        n_restarts=n_restarts,
     )
     theta = z_to_theta(z_best)
     # Plan E: pick the member whose forward GP best matches y_obs at z_best
@@ -966,15 +755,29 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
     sel = members[best_idx]
     y_hat, sigma_hat = _predict_one(z_best, sel, ctx)
     raw_wrms = relative_wrms(y_hat, item["y_obs"])
-    # Method C: Hessian-based 95 % CI at MAP (Laplace approximation)
-    z_std, theta_ci, _Hmat = (np.full(3, float("nan")),
-                               [(float("nan"), float("nan"))]*3, None)
+
+    # Hessian Laplace CI (Type-II ML posterior approximation).  Optional
+    # (--shape-report-ci); 9 extra GP evals.  Wide CI on a dim flagged
+    # !identifiable means that direction is under-identified by the data alone.
+    ci_block = {}
     if bool(getattr(args, "shape_report_ci", False)):
         try:
-            z_std, theta_ci, _Hmat = _hessian_ci(loss, z_best, primary.z_scale)
-        except Exception as _e:
-            print(f"[hessian_ci] failed: {_e}")
-    return {
+            z_std, theta_ci, ci_flags = _hessian_ci(loss, z_best, primary.z_scale)
+            ci_block = {
+                "z_std": z_std.tolist(),
+                "theta_ci_95": {
+                    "n":       list(theta_ci[0]),
+                    "eta":     list(theta_ci[1]),
+                    "sigma_y": list(theta_ci[2]),
+                },
+                "identifiable": {
+                    "n": ci_flags[0], "eta": ci_flags[1], "sigma_y": ci_flags[2]
+                },
+            }
+        except Exception as e:
+            print(f"[hessian_ci] failed: {e}")
+
+    out = {
         "theta_n": theta[0], "theta_eta": theta[1], "theta_sy": theta[2],
         "objective": l_best,
         "raw_wrms_total": raw_wrms,
@@ -988,13 +791,11 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
         "start_kind": "shape_cma_topk" if len(members) > 1 else "shape_cma",
         "opt_s": time.time() - t0, "n_rows": n_ev,
         "val_rel_wrms_median": sel.val_rel_wrms_median,
-        "z_std": z_std.tolist(),
-        "theta_ci_95": {
-            "n": list(theta_ci[0]),
-            "eta": list(theta_ci[1]),
-            "sigma_y": list(theta_ci[2]),
-        },
     }
+    if z_disp is not None:
+        out["z_dispersion"] = z_disp.tolist()       # truth-blind ridge-degeneracy diagnostic
+    out.update(ci_block)
+    return out
 
 
 def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
@@ -1031,8 +832,7 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         lo[2] = max(all_lo_union.min(axis=0)[2] - pad * Z_SCALE_NP[2], fb_lo_orig[2])
     # Warm-start: when setup2 is invoked with --shape-warm-start-from-first,
     # setup2.py reads <first_dir>/theta_hat.json and writes the unpacked z
-    # into args.shape_warm_start_z.  Use it as CMA-ES x0 (and as the σY
-    # anchor below if --shape-sy-prior-weight > 0) instead of the legacy
+    # into args.shape_warm_start_z.  Use it as CMA-ES x0 instead of the
     # midpoint of the two members' z_nn.  Lets a strong setup1 K=3 result
     # warm a fast joint K=1 / K=2 inverse.
     ws_z = getattr(args, "shape_warm_start_z", None)
@@ -1042,164 +842,55 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         x0 = clamp_z(0.5 * (ma.z_nn + mb.z_nn))
     x0 = np.maximum(np.minimum(x0, hi - 1e-3), lo + 1e-3)
     sup_w = float(getattr(args, "shape_support_weight", 0.25))
-    loss_mode = args.loss_mode
-
-    # ---- σY two-stage prior (V1-paper style: anchor σY across setups) ----
-    sy_prior_w = float(getattr(args, "shape_sy_prior_weight", 0.0))
-    log_sy_anchor = None
-    log_sy_prior_std = None
-    sy_a_ret = sy_b_ret = sy_anchor_ret = float("nan")
-    sat_lo = float(getattr(args, "shape_sy_sat_lo", 8.0))
-    sat_hi = float(getattr(args, "shape_sy_sat_hi", 380.0))
-    sat_factor = float(getattr(args, "shape_sy_prior_sat_factor", 0.0))
-    if sy_prior_w > 0 and ws_z is not None:
-        # Warm-start path: use the σY of the supplied warm-start θ̂ as the
-        # anchor directly. Skips the expensive internal stage-1 single
-        # inverses; relies on the caller having run setup1 (e.g. K=3) and
-        # producing a trustworthy σY.  Mimics res_a/res_b structure for
-        # downstream code by routing both setups to the same supplied σY.
-        sy_anchor_ret = float(np.exp(ws_z[2]))
-        log_sy_anchor = float(ws_z[2])
-        log_sy_prior_std = max(
-            float(getattr(args, "shape_sy_prior_min_std", 0.4)),
-            0.5,  # widely permissive when no disagreement signal available
-        )
-        sy_a_ret = sy_anchor_ret
-        sy_b_ret = sy_anchor_ret
-    elif sy_prior_w > 0:
-        # Stage-1: single inverse on each setup
-        try:
-            res_a = inverse_single_shape(item_a, args, device, dtype)
-            res_b = inverse_single_shape(item_b, args, device, dtype)
-        except Exception as e:
-            res_a = res_b = None
-        if res_a and res_b:
-            sy_a_ret = res_a["theta_sy"]
-            sy_b_ret = res_b["theta_sy"]
-            log_sy_a = np.log(max(sy_a_ret, 1e-6))
-            log_sy_b = np.log(max(sy_b_ret, 1e-6))
-            # Saturation guard
-            sat_a = (sy_a_ret < sat_lo) or (sy_a_ret > sat_hi)
-            sat_b = (sy_b_ret < sat_lo) or (sy_b_ret > sat_hi)
-
-            # Plan D: confidence-weighted anchor (no truth needed).
-            # Each single is weighted by (1/raw_wrms) × penalty(saturated).
-            # This downweights unreliable single estimates without disabling
-            # them entirely.  Falls back to equal-weighted geometric mean if
-            # weights cannot be computed.
-            anchor_mode = str(getattr(args, "shape_sy_anchor_mode", "weighted"))
-            sat_penalty = float(getattr(args, "shape_sy_anchor_sat_penalty", 0.05))
-            if anchor_mode == "weighted":
-                # Plan D: 1/raw_wrms × sat_penalty
-                rw_a = float(res_a.get("raw_wrms_total", 1.0))
-                rw_b = float(res_b.get("raw_wrms_total", 1.0))
-                w_a = 1.0 / max(rw_a, 1e-3)
-                w_b = 1.0 / max(rw_b, 1e-3)
-                if sat_a:
-                    w_a *= sat_penalty
-                if sat_b:
-                    w_b *= sat_penalty
-                ws = w_a + w_b
-                if ws <= 0:
-                    log_sy_anchor = 0.5 * (log_sy_a + log_sy_b)
-                else:
-                    log_sy_anchor = (w_a * log_sy_a + w_b * log_sy_b) / ws
-            elif anchor_mode == "boundary":
-                # Plan F: weight = 1.0 if NOT at boundary, sat_penalty if at
-                # boundary.  Drops the 1/raw_wrms factor that hurt Plan D —
-                # only the boundary signal matters.
-                w_a = sat_penalty if sat_a else 1.0
-                w_b = sat_penalty if sat_b else 1.0
-                ws = w_a + w_b
-                log_sy_anchor = (w_a * log_sy_a + w_b * log_sy_b) / ws
-            else:
-                # Legacy "equal" anchor (Plan B path).
-                if sat_a or sat_b:
-                    sy_prior_w *= sat_factor
-                log_sy_anchor = 0.5 * (log_sy_a + log_sy_b)
-
-            sy_anchor_ret = float(np.exp(log_sy_anchor))
-            # data-driven prior std: if singles agree → tight; if disagree → loose
-            disagree = abs(log_sy_a - log_sy_b)
-            log_sy_prior_std = max(float(getattr(args, "shape_sy_prior_min_std", 0.4)),
-                                     0.5 * disagree)
 
     fw_a = item_a.get("frame_w", FRAME_W_NP)
     fw_b = item_b.get("frame_w", FRAME_W_NP)
-    gauss_w = float(getattr(args, "shape_gaussian_prior_weight", 0.0))
-    mog_pri_w = float(getattr(args, "shape_mog_prior_weight", 0.0))
     sigma_obs_log = float(getattr(args, "shape_gp_noise_log_floor", 0.05))
+
+    n_frames_a = float(len(item_a["y_obs"]))
+    n_frames_b = float(len(item_b["y_obs"]))
+    log_ws_a = np.log(np.maximum(ws_a, 1e-12))
+    log_ws_b = np.log(np.maximum(ws_b, 1e-12))
+
+    def _setup_nll(z, members_list, ctx_, y_obs_, fw_, n_frames_, log_ws_, ws_):
+        """Per-setup mixture marginal NLL (Bayes-correct logsumexp over K members)."""
+        losses = np.empty(len(members_list))
+        sup_arr = np.empty(len(members_list))
+        for i, m in enumerate(members_list):
+            y_hat, sig = _predict_one(z, m, ctx_)
+            sig_calib = sig * m.calib_scale
+            losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, y_obs_, fw_,
+                                                       args.sigma_bias, args.sigma_trend,
+                                                       sigma_obs_log)
+            sup_arr[i] = _support_penalty(z, m)
+        if len(members_list) == 1:
+            nll = float(losses[0])
+        else:
+            log_terms = log_ws_ - losses * n_frames_
+            mx = float(log_terms.max())
+            nll = -(mx + float(np.log(np.sum(np.exp(log_terms - mx))))) / n_frames_
+        sup_total = float(np.dot(ws_, sup_arr))
+        return nll, sup_total
+
     def loss(z):
-        # Plan E: weighted consensus across top-K members for each setup
-        l_a_total = sup_a_total = gp_a_total = 0.0
-        for m, w in zip(members_a, ws_a):
-            y_a, sig_a = _predict_one(z, m, ctx_a)
-            if loss_mode == "log_nuisance_gp":
-                la = _setup_loss_log_nuisance_gp_np(y_a, sig_a, item_a["y_obs"], fw_a,
-                                                      args.sigma_bias, args.sigma_trend,
-                                                      sigma_obs_log)
-            elif loss_mode == "log_nuisance":
-                la = _setup_loss_log_nuisance_np(y_a, item_a["y_obs"], fw_a,
-                                                   args.sigma_bias, args.sigma_trend)
-            else:
-                la = _setup_loss_linear_np(y_a, item_a["y_obs"], fw_a)
-            l_a_total += float(w) * la
-            sup_a_total += float(w) * _support_penalty(z, m)
-            gp_a_total += float(w) * _gaussian_prior(z, m)
-        l_b_total = sup_b_total = gp_b_total = 0.0
-        for m, w in zip(members_b, ws_b):
-            y_b, sig_b = _predict_one(z, m, ctx_b)
-            if loss_mode == "log_nuisance_gp":
-                lb = _setup_loss_log_nuisance_gp_np(y_b, sig_b, item_b["y_obs"], fw_b,
-                                                      args.sigma_bias, args.sigma_trend,
-                                                      sigma_obs_log)
-            elif loss_mode == "log_nuisance":
-                lb = _setup_loss_log_nuisance_np(y_b, item_b["y_obs"], fw_b,
-                                                   args.sigma_bias, args.sigma_trend)
-            else:
-                lb = _setup_loss_linear_np(y_b, item_b["y_obs"], fw_b)
-            l_b_total += float(w) * lb
-            sup_b_total += float(w) * _support_penalty(z, m)
-            gp_b_total += float(w) * _gaussian_prior(z, m)
-        sup = 0.5 * (sup_a_total + sup_b_total)
-        # Bayes-correct prior: a single z-prior, not summed over both
-        # ensembles.  members_a and members_b may route to different
-        # sub-experts; we average their views of the prior so the prior
-        # contribution stays comparable to single-setup magnitude.
-        gp = 0.5 * (gp_a_total + gp_b_total)
-        # Method B (MoG): logsumexp over the union of routed clusters
-        # from both setups.  Sharing one MoG between setups is the
-        # Bayes-correct way (single prior on z); we union the routed
-        # ensembles so a cluster that is dominant under setup A
-        # competes against clusters dominant under setup B in one
-        # mixture.  When members_a == members_b the union equals each
-        # ensemble alone.
-        mog_pri = 0.0
-        if mog_pri_w > 0:
-            members_union = list(members_a) + list(members_b)
-            ws_union = np.concatenate([0.5 * ws_a, 0.5 * ws_b])  # already-normalised
-            ws_union = ws_union / max(ws_union.sum(), 1e-9)
-            mog_pri = _mog_prior_neg_log(z, members_union, ws_union)
-        prior = 0.0
-        if log_sy_anchor is not None:
-            prior = ((z[2] - log_sy_anchor) / log_sy_prior_std) ** 2
-        # Bayes-correct likelihood: −log p(y_a, y_b | z) = −log p(y_a|z)
-        # − log p(y_b|z) = l_a_total + l_b_total (assuming setups
-        # conditionally independent given θ).  Previously this was
-        # 0.5·(l_a+l_b) which halved the data Hessian, leaving joint CI
-        # no narrower than single — the 1/2 made the joint behave like a
-        # weighted-average of the two single losses rather than a proper
-        # multi-data posterior.
-        return (l_a_total + l_b_total + sup_w * sup + gauss_w * gp
-                + mog_pri_w * mog_pri + sy_prior_w * prior)
+        # Plan E: per-setup mixture marginal likelihood (Bayes-correct over its top-K).
+        l_a, sup_a = _setup_nll(z, members_a, ctx_a, item_a["y_obs"], fw_a,
+                                 n_frames_a, log_ws_a, ws_a)
+        l_b, sup_b = _setup_nll(z, members_b, ctx_b, item_b["y_obs"], fw_b,
+                                 n_frames_b, log_ws_b, ws_b)
+        sup = 0.5 * (sup_a + sup_b)
+        # Setups conditionally independent given θ: −log p(y_a,y_b|θ) = l_a + l_b.
+        return l_a + l_b + sup_w * sup
 
     t0 = time.time()
-    z_best, l_best, n_ev = _run_cma(
+    n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
+    z_best, l_best, n_ev, z_disp = _run_cma_multistart(
         loss, x0, lo, hi,
         sigma0=getattr(args, "shape_sigma0", 0.25),
         max_iter=getattr(args, "shape_max_iter", 30),
         popsize=getattr(args, "shape_popsize", 12),
-        seed=7 + ma.sub_id * 100 + mb.sub_id,
+        base_seed=7 + ma.sub_id * 100 + mb.sub_id,
+        n_restarts=n_restarts,
     )
     theta = z_to_theta(z_best)
     # Plan E: pick best-fitting member per setup at z_best
@@ -1223,18 +914,30 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
                    + float(np.sqrt(np.mean((sb * FRAME_W_NP) ** 2))))
     sup = _support_penalty(z_best, sel_a) + _support_penalty(z_best, sel_b)
     topk_tag = "_topk" if (len(members_a)>1 or len(members_b)>1) else ""
-    # Method C: Hessian-based 95 % CI at MAP (Laplace approximation).
-    # Use the smaller per-coord z_scale across the two routed primaries
-    # so the finite-difference step h stays inside both trust regions.
-    z_std, theta_ci, _Hmat = (np.full(3, float("nan")),
-                               [(float("nan"), float("nan"))]*3, None)
+
+    # Hessian Laplace CI (joint posterior).  Step-size uses the smaller
+    # per-dim z_scale across the two routed primaries so finite differences
+    # stay inside both subs' trust regions.
+    ci_block = {}
     if bool(getattr(args, "shape_report_ci", False)):
         try:
             zs_for_h = np.minimum(ma.z_scale, mb.z_scale)
-            z_std, theta_ci, _Hmat = _hessian_ci(loss, z_best, zs_for_h)
-        except Exception as _e:
-            print(f"[hessian_ci] failed: {_e}")
-    return {
+            z_std, theta_ci, ci_flags = _hessian_ci(loss, z_best, zs_for_h)
+            ci_block = {
+                "z_std": z_std.tolist(),
+                "theta_ci_95": {
+                    "n":       list(theta_ci[0]),
+                    "eta":     list(theta_ci[1]),
+                    "sigma_y": list(theta_ci[2]),
+                },
+                "identifiable": {
+                    "n": ci_flags[0], "eta": ci_flags[1], "sigma_y": ci_flags[2]
+                },
+            }
+        except Exception as e:
+            print(f"[hessian_ci] failed: {e}")
+
+    out = {
         "theta_n": theta[0], "theta_eta": theta[1], "theta_sy": theta[2],
         "objective": l_best,
         "raw_wrms_total": raw_wrms,
@@ -1253,208 +956,96 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
         "n_pairs": 1,
         "val_rel_wrms_a": sel_a.val_rel_wrms_median,
         "val_rel_wrms_b": sel_b.val_rel_wrms_median,
-        "sy_single_a": sy_a_ret,
-        "sy_single_b": sy_b_ret,
-        "sy_anchor": sy_anchor_ret,
-        "z_std": z_std.tolist(),
-        "theta_ci_95": {
-            "n": list(theta_ci[0]),
-            "eta": list(theta_ci[1]),
-            "sigma_y": list(theta_ci[2]),
-        },
     }
+    if z_disp is not None:
+        out["z_dispersion"] = z_disp.tolist()
+    out.update(ci_block)
+    return out
 
 
 def add_argparse_args(ap) -> None:
+    """Production y8q + GP-aware-likelihood inverse args.
+
+    Dead paths (Method A/B priors, σ_y two-stage prior, Hessian CI,
+    info_frame_w, long_y8_spillover, sy_split_equal_weight, etc.) were
+    archived to docs/archive_2026-05-07/selector_full_2026-05-07.py on
+    2026-05-07. Use that snapshot if any of those code paths are needed
+    for retrospective comparison.
+    """
+    # ---- CMA-ES ----
     ap.add_argument("--shape-sigma0", type=float, default=0.25,
                     help="CMA-ES initial step in z-space")
     ap.add_argument("--shape-max-iter", type=int, default=30,
                     help="CMA-ES max generations")
     ap.add_argument("--shape-popsize", type=int, default=12,
                     help="CMA-ES population size")
+    ap.add_argument("--shape-cma-seed-offset", type=int, default=0,
+                    help="Offset added to CMA-ES seed; vary across runs to "
+                         "probe identifiability-degenerate θ̂ clusters.")
+    ap.add_argument("--shape-cma-restarts", type=int, default=1,
+                    help="Number of CMA-ES multi-starts (different seeds, take best). "
+                         "n>1 also reports z_dispersion = std(θ_k) across restarts — "
+                         "large dispersion = loss landscape has multiple basins → "
+                         "ridge-degeneracy diagnostic.  Default 1 = legacy single-start. "
+                         "5 is a reasonable paper-grade choice (5× CMA cost).")
+    # ---- inverse bbox ----
     ap.add_argument("--shape-box-pad", type=float, default=0.10,
                     help="z-space pad applied to sub training bbox before CMA-ES")
     ap.add_argument("--shape-support-weight", type=float, default=0.25,
                     help="Penalty on z outside sub training bbox")
-    ap.add_argument("--shape-sy-prior-weight", type=float, default=0.0,
-                    help="V1-paper-style σY two-stage prior: λ in "
-                         "λ × ((log σY - log σY_anchor)/σ)². 0 = off.")
-    ap.add_argument("--shape-sy-prior-min-std", type=float, default=0.4,
-                    help="Floor on prior std (log space). When the two single "
-                         "estimates of σY agree closely the prior would be "
-                         "infinitely tight; this floor keeps it physically "
-                         "useful (e.g. 0.4 ≈ 50%).")
-    ap.add_argument("--shape-sy-sat-lo", type=float, default=8.0,
-                    help="σY saturation lower bound (default 8 Pa internal). "
-                         "Single estimates at/below get treated as unreliable.")
-    ap.add_argument("--shape-sy-sat-hi", type=float, default=380.0,
-                    help="σY saturation upper bound (default 380).")
-    ap.add_argument("--shape-sy-prior-sat-factor", type=float, default=0.0,
-                    help="Multiplier on prior weight when either single σY "
-                         "estimate is saturated. 0 = skip prior entirely, "
-                         "0.2 = weak prior, 1.0 = no guard.")
-    ap.add_argument("--shape-sy-prior-single-weight", type=float, default=0.0,
-                    help="Plan C: σY prior weight for single mode. "
-                         "Helps stabilise single-setup σY estimates "
-                         "against ridge degeneracy.")
-    ap.add_argument("--shape-sy-prior-single-anchor", type=str,
-                    default="z_nn", choices=["z_nn", "z_mu"],
-                    help="Plan C anchor: 'z_nn' (default, σY of nearest "
-                         "training y to y_obs) or 'z_mu' (sub training "
-                         "mean σY). z_nn is more data-informative.")
-    ap.add_argument("--shape-sy-anchor-mode", type=str,
-                    default="equal",
-                    choices=["weighted", "equal", "boundary"],
-                    help="σY anchor mode: 'equal' = Plan B geometric mean "
-                         "(production default), 'weighted' = Plan D "
-                         "(1/raw_wrms × sat_penalty), 'boundary' = Plan F "
-                         "(weight 1 if not saturated, sat_penalty if at "
-                         "boundary).")
-    ap.add_argument("--shape-sy-anchor-sat-penalty", type=float,
-                    default=0.05,
-                    help="Plan D: weight multiplier when a single σY is "
-                         "saturated. 0.05 = heavy downweight, 1.0 = no "
-                         "penalty.")
+    # ---- routing ----
     ap.add_argument("--shape-top-k", type=int, default=1,
-                    help="Plan E: top-K candidate subs per setup based on "
-                         "PCA distance.  Loss = softmax-weighted consensus "
-                         "across all K GPs at the same z. Wrong-routed "
-                         "subs auto-downweight (their forward GP fails to "
-                         "match y_obs). 1 = legacy top-1, 3 = recommended.")
+                    help="Top-K candidate subs per setup. Loss = softmax-weighted "
+                         "consensus across the K GPs. 1 = top-1, 2-3 = ensemble.")
     ap.add_argument("--shape-topk-softmax-tau", type=float, default=1.5,
-                    help="Plan E: softmax temperature on PCA distance. "
-                         "Smaller = sharper top-1 weight. Larger = more "
-                         "even consensus.")
-    # ---- L2 (length-bin) gate softening (Fix A / C1 / C3) ----
-    # Background: L2 gate uses real y_obs[7] against bin edges that were
-    # learned on SIM data. With known sim>real bias (e.g. surface tension
-    # absent in MPM), real y_obs[7] near a bin upper edge gets routed to
-    # the lower bin even though the truth-θ would lie in the upper bin.
+                    help="Softmax temperature on routing scores. Smaller = "
+                         "sharper top-1 weight; larger = more even consensus.")
     ap.add_argument("--shape-l2-mode", type=str, default="hard",
-                    choices=["hard", "eps", "cross_bin", "hybrid", "soft_attn"],
-                    help="L2 (length-bin) gate behaviour: "
-                         "'hard' = legacy strict bin lookup; "
-                         "'eps' = Fix A — when y_obs[7] is within "
-                         "--shape-l2-eps-cm of a bin edge, also pull all "
-                         "subs from the neighbour bin into the candidate "
-                         "pool; "
-                         "'cross_bin' = C1 — ignore L2, take each bin's "
-                         "top-1 sub (per-bin PCA), rank meta by GP "
-                         "fidelity at the sub's z_nn; "
-                         "'hybrid' = C3 — primary bin's full subs (legacy) "
-                         "+ each non-primary bin's top-1 sub.")
+                    choices=["hard", "eps"],
+                    help="L2 (length-bin) gate behaviour for legacy two-layer "
+                         "partitions: 'hard' = strict bin lookup; "
+                         "'eps' = pull neighbour bin's subs when y_obs[7] is "
+                         "within --shape-l2-eps-cm of a bin edge.")
     ap.add_argument("--shape-l2-eps-cm", type=float, default=0.5,
-                    help="Fix A: distance (cm) from y_obs[7] to a bin edge "
-                         "below which the neighbour bin is also pulled in.")
-    ap.add_argument("--shape-per-sub-z-scale", action="store_true",
-                    help="Improvement (6): use union of routed subs' "
-                         "per-training-data z_scale for the CMA-ES bbox "
-                         "padding, instead of the fixed Z_SCALE_NP "
-                         "constant [0.20, 0.90, 1.20].  Adapts the box "
-                         "size to the routed members' actual variance.")
-    ap.add_argument("--shape-info-frame-w", action="store_true",
-                    help="Improvement (5): replace fixed --shape-frame-w "
-                         "with info-weighted Jacobian magnitude ∂y/∂z at "
-                         "primary member's z_nn (3 extra GP calls). Frames "
-                         "where the surrogate is most sensitive to θ get "
-                         "more weight in the CMA-ES loss.")
-    ap.add_argument("--shape-gaussian-prior-weight", type=float, default=0.0,
-                    help="Method A: Gaussian prior weight λ added to "
-                         "the CMA-ES loss as λ·Σᵢwᵢ·½‖(z−z_mu_i)/z_scale_i‖² "
-                         "where (z_mu_i, z_scale_i) come from each routed "
-                         "sub's training data.  Equivalent to a single "
-                         "Gaussian prior centered at the precision-weighted "
-                         "mean of all sub means, with covariance "
-                         "(Σᵢwᵢ Λ_i⁻¹)⁻¹.  λ=1.0 = standard MAP, smaller "
-                         "= weaker pull, 0 = off (legacy).  Recommended: "
-                         "1.0 to anchor σ_y away from extreme bbox edges.")
-    ap.add_argument("--shape-mog-prior-weight", type=float, default=0.0,
-                    help="Method B: Mixture-of-Gaussians prior weight "
-                         "λ added to the CMA-ES loss as "
-                         "−λ · logsumexp_k [log π_k − ½‖(z−μ_k)/σ_k‖² "
-                         "− Σ_j log σ_kj] where π_k = routing ensemble "
-                         "weights and (μ_k, σ_k) come from each routed "
-                         "sub's training data.  Compared to Method A's "
-                         "weighted-average quadratic prior, the "
-                         "logsumexp lets one cluster softly dominate "
-                         "when z is near its mode and is robust to "
-                         "wrong-cluster routing (far clusters drop out "
-                         "of the logsumexp automatically).  λ=1.0 = "
-                         "standard MAP, 0 = off.  Use INSTEAD of "
-                         "--shape-gaussian-prior-weight, not in "
-                         "addition (combining double-counts the prior).")
-    ap.add_argument("--shape-long-y8-spillover-factor", type=float, default=0.0,
-                    help="Flat partition only. Forces a 'long-flow' cluster's "
-                         "σ_y-low sub into the ensemble with this weight share "
-                         "to recover OLD length-bin's bin_4 → bin_3 spillover. "
-                         "Long-flow cluster = nearest with y8_med > ratio × "
-                         "y_obs[7] (default ratio=1.5). 0 = off, 0.2 = mild, "
-                         "0.5 = strong σ_y anchor.")
-    ap.add_argument("--shape-long-y8-spillover-ratio", type=float, default=1.5,
-                    help="Multiplier on y_obs[7] for the long-y8 cluster threshold.")
-    ap.add_argument("--shape-sy-split-equal-weight", action="store_true",
-                    help="Flat partition only: force the two σ_y-low/high "
-                         "split sub-experts of each routed cluster to have "
-                         "equal ensemble weights (50/50 within their pair). "
-                         "Recovers the symmetric σ_y averaging that the OLD "
-                         "length-bin sy model had via bin spillover.  "
-                         "gp_fit / inv_var / pca weighting all naturally "
-                         "bias one half — this re-centres the σ_y ensemble.")
-    ap.add_argument("--shape-mog-sigma-obs", type=float, default=0.05,
-                    help="Observation noise σ (cm) added to GP variance "
-                         "in --loss-mode=mog_likelihood. Prevents singular "
-                         "Σ when GP is over-confident. 0.05 = ~5%% of "
-                         "typical y_obs scale.")
+                    help="Distance (cm) from y_obs[7] to a bin edge below "
+                         "which the neighbour bin is pulled in (--shape-l2-mode=eps).")
+    ap.add_argument("--shape-eps-cap-by-primary", action="store_true",
+                    help="Cap eps-spillover contribution to ≤ primary bin "
+                         "sub count to avoid the denser neighbour bin "
+                         "dominating the ensemble.")
+    ap.add_argument("--shape-weight-mode", type=str, default="gp_fit_y8_quantile",
+                    choices=["pca", "gp_fit", "gp_fit_y8_quantile"],
+                    help="Sub-level routing re-rank: "
+                         "'gp_fit_y8_quantile' (production) = pick sub for which "
+                         "y_obs[7] is most central in training Y_8 distribution "
+                         "(Bayes-evidence-like); "
+                         "'gp_fit' (legacy) = ||GP(z_nn) - y_obs|| in raw y-space; "
+                         "'pca' = top-K by PCA centroid distance only.")
+    ap.add_argument("--shape-gpfit-oversample", type=int, default=3,
+                    help="When --shape-weight-mode in {gp_fit, gp_fit_y8_quantile}, "
+                         "oversample factor for the PCA pre-filter: routing "
+                         "fetches K*factor candidates, then re-ranks.")
+    # ---- loss ----
     ap.add_argument("--shape-gp-noise-log-floor", type=float, default=0.05,
                     help="GP-aware likelihood: log-space measurement noise "
                          "floor σ_obs_log added in quadrature to delta-method "
                          "log-y std (σ_pred / y_hat). Used by "
                          "--loss-mode=log_nuisance_gp. 0.05 ≈ 5%% relative "
-                         "noise floor; raise it (0.10–0.20) if the GP is "
-                         "over-confident on real data and CMA-ES collapses "
-                         "into low-σ_pred regions.")
-    ap.add_argument("--shape-report-ci", action="store_true",
-                    help="Method C: report Laplace-approx 95 %% CI on θ "
-                         "computed from the numerical Hessian of the "
-                         "negative-log-posterior at the MAP point. Adds 9 "
-                         "extra GP evals (3 diag + 3 off-diag central "
-                         "differences). Wide CI on σ_y under single-setup "
-                         "indicates the well-known identifiability "
-                         "degeneracy; joint setup CI should narrow it.")
-    ap.add_argument("--shape-cma-seed-offset", type=int, default=0,
-                    help="Improvement (3): offset added to CMA-ES seed. "
-                         "Run setup1 with different offsets (0, 100, 200, "
-                         "300, 400) to detect identifiability-degenerate "
-                         "θ̂ clusters in surrogate loss landscape.")
-    ap.add_argument("--shape-eps-cap-by-primary", action="store_true",
-                    help="Fix A v2: when --shape-l2-mode=eps spillover is "
-                         "active, cap the neighbour bin's contribution to "
-                         "≤ primary bin sub count (top by PCA).  Avoids "
-                         "the case where a denser neighbour bin dominates "
-                         "the ensemble and biases σ_y the wrong direction "
-                         "(e.g. Okonomiyaki: bin_3 primary 7 subs vs bin_2 "
-                         "spillover 9 subs all biased high σ_y).")
-    ap.add_argument("--shape-weight-mode", type=str, default="pca",
-                    choices=["pca", "gp_fit", "inv_var"],
-                    help="Option E: how to weight ensemble members. "
-                         "'pca' = legacy softmax on PCA distance to sub "
-                         "centroid in y-shape space; "
-                         "'gp_fit' = softmax on ||GP(z_nn) - y_obs|| in "
-                         "raw y-space — directly punishes subs whose GP "
-                         "cannot predict y_obs even at its own nearest "
-                         "training θ. Cross-bin comparable (unlike PCA "
-                         "distance). Adds K cheap GP evals at routing time.")
-    ap.add_argument("--shape-gpfit-oversample", type=int, default=3,
-                    help="Option D: when --shape-weight-mode=gp_fit, "
-                         "oversample factor for the PCA pre-filter. "
-                         "Routing fetches K * factor candidates by PCA "
-                         "distance, then re-ranks by GP-fit at z_nn and "
-                         "keeps the top-K.  Larger = more thorough but "
-                         "+(50-200ms × extra subs) routing overhead.")
+                         "noise floor; raise (0.10–0.20) if the GP is over-"
+                         "confident on real data and CMA-ES collapses into "
+                         "low-σ_pred regions.")
     ap.add_argument("--shape-frame-w", type=float, nargs=8, default=None,
                     metavar=("F1","F2","F3","F4","F5","F6","F7","F8"),
                     help="Override per-frame loss weight (default "
                          "[0.2,0.2,0.35,0.5,0.8,1.0,1.4,2.0]). Use to "
                          "down-weight frames dominated by un-modeled "
                          "physics (e.g. f1-f2 surface-tension initial "
-                         "yield). Pass exactly 8 floats.")
+                         "yield, drop_f1: 0.0 0.2 0.35 ...). Pass 8 floats.")
+    # ---- UQ output ----
+    ap.add_argument("--shape-report-ci", action="store_true",
+                    help="Type-II ML Laplace 95%% CI on (n, η, σ_y) from numerical "
+                         "Hessian at MAP (9 extra GP evals).  Output dict gains "
+                         "'theta_ci_95' + 'identifiable' (per-dim flag).  An "
+                         "under-identified direction (eigenvalue at floor) means "
+                         "the data alone cannot pin θ in that direction — joint "
+                         "two-setup typically narrows σ_y CI dramatically.")

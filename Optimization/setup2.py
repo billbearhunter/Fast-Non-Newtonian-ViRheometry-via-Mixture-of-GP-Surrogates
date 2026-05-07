@@ -74,23 +74,30 @@ def main():
     ap.add_argument("-s", "--second-dir", type=Path, required=True)
     ap.add_argument("--state-root", type=Path, default=V10.STATE_ROOT,
                     help="Trained MoGP-rBCM bank root")
-    ap.add_argument("--loss-mode", choices=["linear", "log_nuisance", "log_nuisance_gp", "mog_likelihood"], default="log_nuisance")
+    ap.add_argument("--loss-mode", choices=["log_nuisance_gp"], default="log_nuisance_gp",
+                    help="GP-aware Type-II ML likelihood (production). "
+                         "Old modes linear / log_nuisance / mog_likelihood "
+                         "archived 2026-05-07.")
     ap.add_argument("--sigma-bias", type=float, default=0.25)
     ap.add_argument("--sigma-trend", type=float, default=0.20)
     ap.add_argument("--sigma-y-min", type=float, default=5.0)
     ap.add_argument("--inverse-mode", choices=["shape"], default="shape")
+    ap.add_argument("--legacy", action="store_true",
+                    help="Reserved for future re-introduction of archived "
+                         "legacy paths. Currently a no-op — code lives in "
+                         "docs/archive_2026-05-07/selector_full_2026-05-07.py.")
     ap.add_argument("--shape-warm-start-from-first", action="store_true",
-                    help="Read <first_dir>/theta_hat.json (must exist; "
-                         "produced by a prior setup1 run) and use its θ̂ "
-                         "as joint CMA-ES warm-start x0.  When combined "
-                         "with --shape-sy-prior-weight > 0 also uses "
-                         "setup1's σY directly as the prior anchor "
-                         "(skipping setup2's expensive internal stage-1 "
-                         "single inverses).  Workflow: setup1 -K=3 → "
-                         "writes theta_hat.json → setup2 -K=1 with this "
-                         "flag picks up the warm-start cheaply.")
+                    help="Read <first_dir>/theta_hat.json (produced by a "
+                         "prior setup1 run) and use its θ̂ as joint CMA-ES "
+                         "warm-start x0.  Workflow: setup1 -K=3 → writes "
+                         "theta_hat.json → setup2 -K=1 with this flag.")
     SHA.add_argparse_args(ap)
     args = ap.parse_args()
+    if args.legacy:
+        print("[setup2] --legacy flag accepted (no-op). "
+              "Legacy code paths archived 2026-05-07; restore from "
+              "docs/archive_2026-05-07/selector_full_2026-05-07.py if needed.",
+              flush=True)
 
     V10.STATE_ROOT = args.state_root.resolve()
     if args.shape_warm_start_from_first:
