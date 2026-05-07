@@ -325,14 +325,23 @@ def _hessian_ci(loss_fn, z_best, h_scale: np.ndarray, alpha: float = 0.05,
 # ---------------------------------------------------------------------------
 
 def _run_cma(loss_fn, x0, lo, hi, sigma0=0.25, max_iter=30, popsize=12, seed=7):
+    """CMA-ES driver.
+
+    loss_fn must accept either a single z (shape (3,)) returning a scalar,
+    OR a batch of z's (shape (P, 3) or list of (3,)-arrays) returning a
+    1-D array of P losses.  We always pass the full popsize batch from
+    `es.ask()` in a single call → batched GP forward via predict_full_batched
+    amortises Python+CUDA launch overhead.  ~5-10× speedup over per-z calls.
+    """
     opts = {"bounds": [list(lo), list(hi)], "popsize": popsize, "verbose": -9,
             "tolfun": 1e-6, "tolx": 1e-5, "maxiter": max_iter, "seed": seed}
     es = cma.CMAEvolutionStrategy(list(x0), float(sigma0), opts)
     n_evals = 0
     while not es.stop():
-        xs = es.ask()
-        losses = [loss_fn(np.asarray(x, dtype=np.float64)) for x in xs]
-        es.tell(xs, losses)
+        xs = es.ask()                                         # list of popsize np.ndarrays
+        xs_arr = np.asarray(xs, dtype=np.float64)              # (popsize, 3)
+        losses_arr = np.asarray(loss_fn(xs_arr)).ravel()       # (popsize,)
+        es.tell(xs, losses_arr.tolist())
         n_evals += len(xs)
     return np.asarray(es.result.xbest, dtype=np.float64), float(es.result.fbest), n_evals
 
@@ -711,30 +720,44 @@ def inverse_single_shape(item, args, device, dtype) -> dict | None:
 
     n_frames = float(len(item["y_obs"]))
     log_w = np.log(np.maximum(weights, 1e-12))
+    disable_calib = bool(getattr(args, "shape_disable_calib", True))
+    M = len(members)
 
-    def loss(z):
-        # Compute per-member NLL (= -log p_m(y|θ) / n_frames) and support penalty.
-        losses = np.empty(len(members))
-        sup_arr = np.empty(len(members))
+    def loss(z_or_zs):
+        """Batched loss.  Accepts (3,) single z or (P, 3) batch.
+
+        Returns scalar if input is 1-D (3,), else (P,) array.
+
+        Strategy: ONE batched GP forward per member per CMA generation
+        (across all popsize candidates), then numpy-only per-z aggregation.
+        Amortises Python+CUDA launch overhead.
+        """
+        in_arr = np.asarray(z_or_zs, dtype=np.float64)
+        scalar_in = (in_arr.ndim == 1)
+        arr = in_arr.reshape(-1, 3)
+        P = arr.shape[0]
+        # Per-member NLL contributions, shape (M, P).
+        losses_mat = np.empty((M, P))
+        sup_mat = np.empty((M, P))
+        zs_list = arr.tolist()
         for i, m in enumerate(members):
-            y_hat, sig = _predict_one(z, m, ctx)
-            sig_calib = sig if bool(getattr(args, "shape_disable_calib", True)) else sig * m.calib_scale       # post-hoc GP variance calibration
-            losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, item["y_obs"], fw,
-                                                       args.sigma_bias, args.sigma_trend,
-                                                       sigma_obs_log)
-            sup_arr[i] = _support_penalty(z, m)
-        # Bayes-correct mixture marginal NLL (Method-B-style logsumexp):
-        #   −log Σ_m π_m p_m(y|θ) = −logsumexp_m [ log π_m + log p_m(y|θ) ]
-        # log p_m(y|θ) = −losses[m] · n_frames (un-normalize from per-frame avg).
-        # K=1: collapses to losses[0]; this branch is taken in production y8q.
-        if len(members) == 1:
-            l_total = float(losses[0])
+            y_hat_arr, sig_arr = predict_full_batched(m, zs_list, ctx)   # (P, 8) each
+            if not disable_calib:
+                sig_arr = sig_arr * m.calib_scale
+            for p in range(P):
+                losses_mat[i, p] = _setup_loss_log_nuisance_gp_np(
+                    y_hat_arr[p], sig_arr[p], item["y_obs"], fw,
+                    args.sigma_bias, args.sigma_trend, sigma_obs_log)
+                sup_mat[i, p] = _support_penalty(arr[p], m)
+        if M == 1:
+            l_totals = losses_mat[0].copy()
         else:
-            log_terms = log_w - losses * n_frames
-            mx = float(log_terms.max())
-            l_total = -(mx + float(np.log(np.sum(np.exp(log_terms - mx))))) / n_frames
-        sup_total = float(np.dot(weights, sup_arr))
-        return l_total + sup_w * sup_total
+            log_terms = log_w[:, None] - losses_mat * n_frames        # (M, P)
+            mx = log_terms.max(axis=0)                                 # (P,)
+            l_totals = -(mx + np.log(np.exp(log_terms - mx[None, :]).sum(axis=0))) / n_frames
+        sup_totals = weights @ sup_mat                                 # (P,)
+        out = l_totals + sup_w * sup_totals
+        return float(out[0]) if scalar_in else out
 
     t0 = time.time()
     n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
@@ -854,36 +877,47 @@ def inverse_double_shape(item_a, item_b, args, device, dtype) -> dict | None:
     n_frames_b = float(len(item_b["y_obs"]))
     log_ws_a = np.log(np.maximum(ws_a, 1e-12))
     log_ws_b = np.log(np.maximum(ws_b, 1e-12))
+    disable_calib = bool(getattr(args, "shape_disable_calib", True))
+    Ma = len(members_a)
+    Mb = len(members_b)
 
-    def _setup_nll(z, members_list, ctx_, y_obs_, fw_, n_frames_, log_ws_, ws_):
-        """Per-setup mixture marginal NLL (Bayes-correct logsumexp over K members)."""
-        losses = np.empty(len(members_list))
-        sup_arr = np.empty(len(members_list))
+    def _setup_nll_batched(arr, members_list, ctx_, y_obs_, fw_,
+                            n_frames_, log_ws_, ws_, M):
+        """Per-setup batched mixture NLL.  arr shape (P, 3) → (nlls (P,), sups (P,))."""
+        P = arr.shape[0]
+        losses_mat = np.empty((M, P))
+        sup_mat = np.empty((M, P))
+        zs_list = arr.tolist()
         for i, m in enumerate(members_list):
-            y_hat, sig = _predict_one(z, m, ctx_)
-            sig_calib = sig if bool(getattr(args, "shape_disable_calib", True)) else sig * m.calib_scale
-            losses[i] = _setup_loss_log_nuisance_gp_np(y_hat, sig_calib, y_obs_, fw_,
-                                                       args.sigma_bias, args.sigma_trend,
-                                                       sigma_obs_log)
-            sup_arr[i] = _support_penalty(z, m)
-        if len(members_list) == 1:
-            nll = float(losses[0])
+            y_hat_arr, sig_arr = predict_full_batched(m, zs_list, ctx_)
+            if not disable_calib:
+                sig_arr = sig_arr * m.calib_scale
+            for p in range(P):
+                losses_mat[i, p] = _setup_loss_log_nuisance_gp_np(
+                    y_hat_arr[p], sig_arr[p], y_obs_, fw_,
+                    args.sigma_bias, args.sigma_trend, sigma_obs_log)
+                sup_mat[i, p] = _support_penalty(arr[p], m)
+        if M == 1:
+            nlls = losses_mat[0].copy()
         else:
-            log_terms = log_ws_ - losses * n_frames_
-            mx = float(log_terms.max())
-            nll = -(mx + float(np.log(np.sum(np.exp(log_terms - mx))))) / n_frames_
-        sup_total = float(np.dot(ws_, sup_arr))
-        return nll, sup_total
+            log_terms = log_ws_[:, None] - losses_mat * n_frames_      # (M, P)
+            mx = log_terms.max(axis=0)
+            nlls = -(mx + np.log(np.exp(log_terms - mx[None, :]).sum(axis=0))) / n_frames_
+        sup_totals = ws_ @ sup_mat
+        return nlls, sup_totals
 
-    def loss(z):
-        # Plan E: per-setup mixture marginal likelihood (Bayes-correct over its top-K).
-        l_a, sup_a = _setup_nll(z, members_a, ctx_a, item_a["y_obs"], fw_a,
-                                 n_frames_a, log_ws_a, ws_a)
-        l_b, sup_b = _setup_nll(z, members_b, ctx_b, item_b["y_obs"], fw_b,
-                                 n_frames_b, log_ws_b, ws_b)
+    def loss(z_or_zs):
+        """Batched joint loss.  Accepts (3,) or (P, 3); returns scalar or (P,)."""
+        in_arr = np.asarray(z_or_zs, dtype=np.float64)
+        scalar_in = (in_arr.ndim == 1)
+        arr = in_arr.reshape(-1, 3)
+        nlls_a, sup_a = _setup_nll_batched(arr, members_a, ctx_a, item_a["y_obs"], fw_a,
+                                            n_frames_a, log_ws_a, ws_a, Ma)
+        nlls_b, sup_b = _setup_nll_batched(arr, members_b, ctx_b, item_b["y_obs"], fw_b,
+                                            n_frames_b, log_ws_b, ws_b, Mb)
         sup = 0.5 * (sup_a + sup_b)
-        # Setups conditionally independent given θ: −log p(y_a,y_b|θ) = l_a + l_b.
-        return l_a + l_b + sup_w * sup
+        out = nlls_a + nlls_b + sup_w * sup
+        return float(out[0]) if scalar_in else out
 
     t0 = time.time()
     n_restarts = max(1, int(getattr(args, "shape_cma_restarts", 1)))
