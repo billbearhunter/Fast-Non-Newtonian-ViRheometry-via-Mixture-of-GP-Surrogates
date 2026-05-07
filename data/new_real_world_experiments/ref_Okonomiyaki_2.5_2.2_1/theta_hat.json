@@ -1,0 +1,41 @@
+{
+  "material": "Okonomiyaki",
+  "setup_1": {
+    "H": 2.5,
+    "W": 2.2,
+    "name": "ref_Okonomiyaki_2.5_2.2_1"
+  },
+  "theta_hat": {
+    "n": 0.627258553951037,
+    "eta": 38.92313008289517,
+    "sigma_y": 102.03756571505237
+  },
+  "objective": -2.7274820180173536,
+  "opt_s": 8.835171461105347,
+  "proposed_setup_2": {
+    "H": 7.0,
+    "W": 7.0,
+    "name": "ref_Okonomiyaki_7.0_7.0_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Okonomiyaki_7.0_7.0_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Okonomiyaki_7.0_7.0_2\\settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      9.770732717267574,
+      155.05593073614008
+    ],
+    "sigma_y": [
+      29.37913199639825,
+      354.3898035629526
+    ]
+  },
+  "z_std": [
+    0.41285315814144385,
+    0.7052026620912214,
+    0.6352328625134824
+  ]
+}
