@@ -1,12 +1,15 @@
 """Generic snapdiff 6-row grid: Real vs MPM(θ̂) vs MPM(truth) + 3 pairwise diffs.
 
-Layout per setup (6 rows × 9 frames):
+Layout per setup (6 rows × 8 frames f1..f8):
     Row 1: Real            (camera y_obs)
     Row 2: MPM(θ̂)
     Row 3: MPM(truth)
     Row 4: |Real − MPM(θ̂)|       × amp
     Row 5: |Real − MPM(truth)|    × amp
     Row 6: |MPM(θ̂) − MPM(truth)| × amp
+
+config_00 is the calibration / pre-release frame and is excluded from
+the snapdiff display (only frames 1..8 carry inverse-relevant flow info).
 
 Two figures saved (setup1 + setup2 separate).
 
@@ -43,13 +46,15 @@ def make_setup_grid(real_dir: Path, hat_dir: Path, truth_dir: Path,
                      fig_title: str, out_path: Path,
                      theta_hat: tuple[float, float, float],
                      theta_truth: tuple[float, float, float],
-                     amp: float = 5.0):
-    fig, axes = plt.subplots(6, 9, figsize=(20, 13))
-    real_imgs = [load_grayscale(real_dir / f"config_{f:02d}.png") for f in range(9)]
-    hat_imgs  = [load_grayscale(hat_dir  / f"config_{f:02d}.png") for f in range(9)]
-    tr_imgs   = [load_grayscale(truth_dir / f"config_{f:02d}.png") for f in range(9)]
+                     amp: float = 5.0,
+                     frames: range = range(1, 9)):
+    n_cols = len(frames)
+    fig, axes = plt.subplots(6, n_cols, figsize=(20 * n_cols / 9, 13))
+    real_imgs = [load_grayscale(real_dir / f"config_{f:02d}.png") for f in frames]
+    hat_imgs  = [load_grayscale(hat_dir  / f"config_{f:02d}.png") for f in frames]
+    tr_imgs   = [load_grayscale(truth_dir / f"config_{f:02d}.png") for f in frames]
 
-    for i, f in enumerate(range(9)):
+    for i, f in enumerate(frames):
         axes[0, i].imshow(real_imgs[i], cmap="gray", vmin=0, vmax=255)
         axes[0, i].axis("off"); axes[0, i].set_title(f"f{f}", fontsize=10)
         axes[1, i].imshow(hat_imgs[i], cmap="gray", vmin=0, vmax=255); axes[1, i].axis("off")
