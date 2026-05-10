@@ -1143,14 +1143,15 @@ def binarize_frame(
     v_thresh: int = V_THRESH,
     dilate_px: int = 0,
     invert: bool = False,
+    v_thresh_hi: int = 255,
 ) -> np.ndarray:
     """
     Binarize a single frame: fluid pixels inside ROI → black, everything else → white.
 
     Default (dark fluid on bright ground): V < v_thresh = foreground.
-    invert=True (bright fluid on dark ground): V > v_thresh = foreground;
-      paper-bright suppression and skin suppression are skipped because
-      they would remove the foreground itself.
+    invert=True (bright fluid on dark ground): v_thresh < V < v_thresh_hi
+      = foreground; v_thresh_hi (default 255) excludes near-saturated
+      specular reflections. Paper-bright/skin suppression skipped.
 
     Output PNG convention is unchanged: 255 = background, 0 = foreground.
     """
@@ -1161,8 +1162,8 @@ def binarize_frame(
     k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
     if invert:
-        # Bright fluid: V > v_thresh, restricted to ROI. No skin/paper masks.
-        dark = (hsv[:, :, 2] > v_thresh).astype(np.uint8) * 255
+        v = hsv[:, :, 2]
+        dark = ((v > v_thresh) & (v < v_thresh_hi)).astype(np.uint8) * 255
         dark = cv2.bitwise_and(dark, roi_mask)
     else:
         # Skin rejection mask (hand)
@@ -1309,6 +1310,10 @@ def parse_args() -> argparse.Namespace:
                    help="Invert binarization for bright fluid on dark "
                         "ground (V > v_thresh = foreground). Skips skin / "
                         "paper-bright suppression.")
+    p.add_argument("--v-thresh-hi", type=int, default=255,
+                   help="Upper V bound (only with --invert). Pixels with "
+                        "V >= v_thresh_hi are excluded — useful to drop "
+                        "specular reflections (try 240). Default: 255 (off).")
 
     # Output options
     p.add_argument("--save-debug", action="store_true",
@@ -1638,14 +1643,19 @@ def main() -> None:
 
     # ── Step 4: Process each frame (binarize + save config_XX.png) ───────
     dilate_note = f", dilate={args.dilate}px" if args.dilate > 0 else ""
-    cmp_note = ">" if args.invert else "<"
-    print(f"\n[process] Binarizing {args.n_configs} frames (V {cmp_note} {args.v_thresh}{dilate_note})...")
+    if args.invert:
+        hi_note = f"<{args.v_thresh_hi}" if args.v_thresh_hi < 255 else ""
+        rule_note = f"V > {args.v_thresh}{hi_note}"
+    else:
+        rule_note = f"V < {args.v_thresh}"
+    print(f"\n[process] Binarizing {args.n_configs} frames ({rule_note}{dilate_note})...")
     for config_idx, frame_idx in enumerate(frame_indices):
         frame = read_frame(cap, frame_idx)
         binary = binarize_frame(frame, roi_mask,
                                 v_thresh=args.v_thresh,
                                 dilate_px=args.dilate,
-                                invert=args.invert)
+                                invert=args.invert,
+                                v_thresh_hi=args.v_thresh_hi)
 
         out_path = out_dir / f"config_{config_idx:02d}.png"
         _imwrite_with_icc(str(out_path), binary, icc_profile)
