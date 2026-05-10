@@ -18,13 +18,13 @@ Estimated total time: 21 gids × ~50 min = ~17 hours.  Run in background.
 
 Usage:
     # Default — process the 21 unused gids in priority order (missing first)
-    python scripts/retrain_unused_gids.py --bank Models/v10_yshape_planB
+    python scripts/retrain_unused_gids.py --bank Models/yshape_mogp_production
 
     # Subset (recommended for testing)
-    python scripts/retrain_unused_gids.py --bank Models/v10_yshape_planB --gids 3,4
+    python scripts/retrain_unused_gids.py --bank Models/yshape_mogp_production --gids 3,4
 
     # Skip already-done (resume after interruption)
-    python scripts/retrain_unused_gids.py --bank Models/v10_yshape_planB --skip-if-current
+    python scripts/retrain_unused_gids.py --bank Models/yshape_mogp_production --skip-if-current
 """
 from __future__ import annotations
 
@@ -122,13 +122,13 @@ def process_gid(bank: Path, gid: int, log_path: Path, env) -> dict:
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--bank", type=Path, default=REPO / "Models" / "v10_yshape_planB")
+    ap.add_argument("--bank", type=Path, default=REPO / "Models" / "yshape_mogp_production")
     ap.add_argument("--gids", type=str, default=None,
                     help="Comma-separated gids; default = priority list")
     ap.add_argument("--skip-if-current", action="store_true",
                     help="Skip gids that already pass is_current() check")
     ap.add_argument("--log-dir", type=Path,
-                    default=REPO / "Models" / "v10_yshape_planB" / "_retrain_logs")
+                    default=REPO / "Models" / "yshape_mogp_production" / "_retrain_logs")
     args = ap.parse_args()
 
     args.log_dir.mkdir(parents=True, exist_ok=True)

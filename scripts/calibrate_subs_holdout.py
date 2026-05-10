@@ -1,7 +1,7 @@
 """Post-hoc GP variance calibration via random hold-out.
 
 The original `calibrate_subs.py` reads pre-stored val tensors from the
-checkpoint, but the v10_yshape_planB checkpoints have empty val tensors
+checkpoint, but the yshape_mogp_production checkpoints have empty val tensors
 (training pipeline at the time skipped val storage).  This script does
 its own random 90/10 hold-out per sub: refits the GP on 90 % using the
 already-trained hyperparameters (no Adam re-fit), predicts on the 10 %,
@@ -13,8 +13,8 @@ c_k > 1 → GP overconfident.  At inference, σ_eff = c_k * σ_GP recovers
 correct heteroscedastic likelihood (Type-II ML).
 
 Usage:
-    python scripts/calibrate_subs_holdout.py --bank Models/v10_yshape_planB --gids 0
-    python scripts/calibrate_subs_holdout.py --bank Models/v10_yshape_planB --dry-run
+    python scripts/calibrate_subs_holdout.py --bank Models/yshape_mogp_production --gids 0
+    python scripts/calibrate_subs_holdout.py --bank Models/yshape_mogp_production --dry-run
 """
 from __future__ import annotations
 

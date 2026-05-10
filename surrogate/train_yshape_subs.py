@@ -56,12 +56,31 @@ def gather_sub_data(state_dir: Path, sub_id: int) -> dict:
         df_val = df.iloc[:0]
     cols_X = ["n", "eta", "sigma_y", "width", "height"]
     cols_Y = [f"x_{i:02d}" for i in range(1, 9)]
+    # Return physical (n, eta, sigma_y, W, H) — log transform applied later in
+    # train_one_sub just before xs.transform, so X_phys saved in checkpoint
+    # remains physical for z_support_from_X / member_nearest_z in engine.py.
     return {
         "X_train": df_train[cols_X].to_numpy(dtype=np.float64),
         "Y_train": df_train[cols_Y].to_numpy(dtype=np.float64),
         "X_val":   df_val[cols_X].to_numpy(dtype=np.float64),
         "Y_val":   df_val[cols_Y].to_numpy(dtype=np.float64),
     }
+
+
+def _phys_to_log(X: np.ndarray) -> np.ndarray:
+    """Physical (n, eta, sigma_y, W, H) → (n, log_eta, log_sigma_y, W, H).
+
+    The V6 InputScaler (xs) was fit on log(eta) and log(sigma_y).  Applying
+    this transform before xs.transform() aligns training with the inference
+    path in engine.py::predict_one(), where z = (n, log_eta, log_sigma_y) is
+    passed directly through xs.  X_phys stored in the checkpoint stays in
+    physical units so that z_support_from_X / member_nearest_z in engine.py
+    can still apply their own log conversion.
+    """
+    X = X.copy()
+    X[:, 1] = np.log(np.clip(X[:, 1], 1e-12, None))  # log(eta)
+    X[:, 2] = np.log(np.clip(X[:, 2], 1e-12, None))  # log(sigma_y)
+    return X
 
 
 def train_one_sub(state_dir: Path, sub_id: int, xs, ys, device, dtype,
@@ -76,12 +95,31 @@ def train_one_sub(state_dir: Path, sub_id: int, xs, ys, device, dtype,
         idx = rng.choice(len(X_train), max_n, replace=False)
         X_train = X_train[idx]
         Y_train = Y_train[idx]
-    X_s = torch.tensor(xs.transform(X_train), dtype=dtype, device=device)
+    # Log-transform eta/sigma_y before InputScaler (xs was fit on log-space).
+    # X_train keeps physical values for saving in checkpoint (X_phys).
+    X_s = torch.tensor(xs.transform(_phys_to_log(X_train)), dtype=dtype, device=device)
     Y_s = torch.tensor(ys.transform(Y_train), dtype=dtype, device=device)
     exp = ExactExpert(X_s, Y_s, kernel_name="matern25_ard").to(device)
     exp.set_train_data(X_s, Y_s)
     t0 = time.time()
-    final_loss = exp.fit(n_iters=n_iters, lr=lr, verbose=False)
+    try:
+        final_loss = exp.fit(n_iters=n_iters, lr=lr, verbose=False)
+    except Exception as e:
+        _emsg = str(e).lower()
+        if any(k in _emsg for k in ("svd", "singular", "linalg", "converge", "ill-conditioned")):
+            # Small subs in log-space can cluster tightly → near-rank-deficient kernel
+            # → SVD failure in Matern 2.5 add_low_rank path. Retry with tiny jitter.
+            print(f"    [warn] sub {sub_id}: SVD/linalg error (N={len(X_train)}), retry with noise")
+            X_s2 = X_s + torch.randn_like(X_s) * 1e-4
+            exp = ExactExpert(X_s2, Y_s, kernel_name="matern25_ard").to(device)
+            exp.set_train_data(X_s2, Y_s)
+            try:
+                final_loss = exp.fit(n_iters=n_iters, lr=lr, verbose=False)
+            except Exception as e2:
+                print(f"    [warn] sub {sub_id}: retry also failed ({e2}), skipping")
+                return None
+        else:
+            raise
     dt = time.time() - t0
     exp.eval()
 
@@ -90,11 +128,14 @@ def train_one_sub(state_dir: Path, sub_id: int, xs, ys, device, dtype,
     Y_val_pred = np.empty((0, 8))
     val_rmse = float("nan")
     val_rel_wrms = float("nan")
+    Y_val_var = np.empty((0, 8))
     if len(X_val) > 0:
         with torch.no_grad():
-            X_val_s = torch.tensor(xs.transform(X_val), dtype=dtype, device=device)
-            mu_s, _ = exp.predict(X_val_s)
+            X_val_s = torch.tensor(xs.transform(_phys_to_log(X_val)), dtype=dtype, device=device)
+            mu_s, var_s = exp.predict(X_val_s)
             Y_val_pred = mu_s.cpu().numpy() + ys.mean
+            # GP posterior variance in scaled output space (diagonal per output dim)
+            Y_val_var = var_s.cpu().numpy()   # shape (N_val, D_Y)
         err = Y_val_pred - Y_val
         val_rmse = float(np.sqrt(np.mean(err * err)))
         FRAME_W = np.array([0.2, 0.2, 0.35, 0.5, 0.8, 1.0, 1.4, 2.0])
@@ -104,10 +145,16 @@ def train_one_sub(state_dir: Path, sub_id: int, xs, ys, device, dtype,
             d = (Y_val_pred[k] - Y_val[k]) * FRAME_W
             per_row.append(float(np.sqrt(np.mean(d * d) / scale)))
         val_rel_wrms = float(np.median(per_row))
+        # GP calibration: mean std vs mean absolute error (lower = better calibrated)
+        mean_gp_std = float(np.sqrt(Y_val_var).mean())
+        mean_abs_err = float(np.abs(err).mean())
         val_metrics.update({
             "val_rmse": val_rmse,
             "val_rel_wrms_median": val_rel_wrms,
             "val_rel_wrms_p90": float(np.quantile(per_row, 0.9)),
+            "val_gp_std_mean": mean_gp_std,
+            "val_abs_err_mean": mean_abs_err,
+            "val_calibration_ratio": mean_gp_std / (mean_abs_err + 1e-9),
         })
 
     return {
@@ -120,9 +167,10 @@ def train_one_sub(state_dir: Path, sub_id: int, xs, ys, device, dtype,
         "n_iters": int(n_iters),
         "final_loss": float(final_loss),
         "fit_seconds": float(dt),
-        # ---- new: val data + forward metrics ----
+        # ---- new: val data + forward metrics + GP confidence ----
         "X_val_phys": X_val, "Y_val_phys": Y_val,
         "Y_val_pred": Y_val_pred,
+        "Y_val_var": Y_val_var,   # GP posterior variance (scaled space, shape N_val×8)
         **val_metrics,
     }
 
@@ -135,7 +183,12 @@ def train_gid(state_dir: Path, gid: int, xs, ys, device, dtype,
     out_dir = state_dir / "experts"
     out_dir.mkdir(exist_ok=True)
     rows = []
-    sub_ids = sorted(s["sub_id"] for b in state["bins"] for s in b["subs"])
+    # Support both legacy two-layer state (has "bins") and flat KMeans state
+    if state.get("partition_type") == "flat_kmeans_separate":
+        sub_ids = sorted(s["sub_id"]
+                         for c in state["flat_clusters"] for s in c["subs"])
+    else:
+        sub_ids = sorted(s["sub_id"] for b in state["bins"] for s in b["subs"])
     print(f"\n=== gid {gid}: {len(sub_ids)} subs ===")
     for sid in sub_ids:
         out_path = out_dir / f"sub_{sid:04d}.pt"
@@ -143,7 +196,19 @@ def train_gid(state_dir: Path, gid: int, xs, ys, device, dtype,
             print(f"  sub {sid:>3d}: exists, skip")
             rows.append({"sub_id": sid, "status": "skip"})
             continue
-        ck = train_one_sub(state_dir, sid, xs, ys, device, dtype, max_n, n_iters, lr)
+        try:
+            ck = train_one_sub(state_dir, sid, xs, ys, device, dtype, max_n, n_iters, lr)
+        except Exception as e:
+            import traceback
+            print(f"  sub {sid:>3d}: EXCEPTION ({type(e).__name__}: {e}), skipping", flush=True)
+            traceback.print_exc()
+            rows.append({"sub_id": sid, "status": f"exception: {type(e).__name__}"})
+            # Try to release memory before continuing
+            import gc
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            continue
         if ck is None:
             print(f"  sub {sid:>3d}: too few points, skip")
             rows.append({"sub_id": sid, "status": "empty"})
@@ -159,6 +224,14 @@ def train_gid(state_dir: Path, gid: int, xs, ys, device, dtype,
                       "seconds": ck["fit_seconds"],
                       "n_val": ck.get("n_val", 0),
                       "val_rel_wrms": ck.get("val_rel_wrms_median", float("nan"))})
+        # Release GPU memory between subs to prevent cumulative OOM
+        # (PyTorch's caching allocator doesn't free promptly otherwise; we've
+        # observed crashes after ~10-12 subs with N≈1000 each on 17 GB GPUs).
+        del ck
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     return rows
 
 

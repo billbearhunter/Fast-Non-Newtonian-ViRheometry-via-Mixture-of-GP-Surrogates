@@ -17,7 +17,7 @@ This is the GP precision metric you need to argue paper-quality
 surrogate accuracy.
 
 Usage:
-    python scripts/audit_gp_precision.py --bank Models/v10_yshape_planB
+    python scripts/audit_gp_precision.py --bank Models/yshape_mogp_production
     python scripts/audit_gp_precision.py --bank ... --gids 0,5,10
     python scripts/audit_gp_precision.py --bank ... --out scripts/gp_audit.json
 """

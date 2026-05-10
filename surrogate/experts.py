@@ -1,11 +1,13 @@
-"""ExactGP experts for hierarchical rBCM-MoGP.
+"""ExactGP and SparseGP (SVGP) experts for hierarchical rBCM-MoGP.
 
-Each (g, k) cluster owns an ExactExpert: D_Y independent single-output
-ExactGPs sharing the same 5-D input but with their own kernel + noise
-hyperparameters.
+Each (g, k) cluster owns one expert: D_Y independent single-output GPs
+sharing the same 5-D input but with their own kernel + noise hyperparameters.
+
+ExactExpert  — exact GP, O(N³) Cholesky, N ≤ 800 (GPyTorch default cap).
+SparseExpert — SVGP with M inducing points, O(NM²) ELBO, no N cap.
+               Use when sub N > 800 to exploit all available data.
 
 After the refactor (2026-04-19), this module is drastically simplified:
-  * No SVGP branch — every expert is exact GP (avg cluster size 547)
   * No hyperprior / KL contributions
   * No joint-model dependencies — each expert is self-contained
   * Exposes standalone `fit()` for independent MLE training and
@@ -20,7 +22,7 @@ import torch
 import torch.nn as nn
 import gpytorch
 
-from surrogate.gp_base import SingleOutputExactGP
+from surrogate.gp_base import SingleOutputExactGP, make_kernel
 from surrogate import config as HC
 
 
@@ -298,5 +300,193 @@ class ExactExpert(nn.Module):
             # outputscale is the amplitude of the base kernel
             os = m.covar_module.outputscale
             ns = lk.noise
+            vs.append(os + ns)
+        return torch.stack(vs).reshape(-1)
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Sparse GP expert — no N cap, uses inducing points (SVGP / ELBO)
+# ════════════════════════════════════════════════════════════════════════════
+
+class _SingleOutputSVGP(gpytorch.models.ApproximateGP):
+    """Single-output SVGP with learnable inducing locations."""
+
+    def __init__(self, inducing_points: torch.Tensor, kernel_name: str = "matern25_ard"):
+        vdist = gpytorch.variational.CholeskyVariationalDistribution(
+            inducing_points.size(0)
+        )
+        vstrat = gpytorch.variational.VariationalStrategy(
+            self, inducing_points, vdist, learn_inducing_locations=True
+        )
+        super().__init__(vstrat)
+        self.mean_module  = gpytorch.means.ConstantMean()
+        self.covar_module = make_kernel(kernel_name)
+        self.kernel_name  = kernel_name
+
+    def forward(self, x: torch.Tensor) -> gpytorch.distributions.MultivariateNormal:
+        return gpytorch.distributions.MultivariateNormal(
+            self.mean_module(x), self.covar_module(x)
+        )
+
+
+class SparseExpert(nn.Module):
+    """SVGP expert: same interface as ExactExpert but no N=800 Cholesky cap.
+
+    Uses M inducing points (default: min(N//4, 300)), initialised by K-means
+    on X_train.  Training minimises the variational ELBO with mini-batching.
+    Prediction returns (mean, variance) of shape (B, D_Y), compatible with
+    the rBCM aggregator and engine.py's load_sub_gp / predict_one pipeline.
+
+    Recommended usage:
+        exp = SparseExpert(X_s, Y_s, kernel_name="matern25_ard", n_inducing=200)
+        exp.set_train_data(X_s, Y_s)      # attach full dataset
+        exp.fit(n_iters=400, lr=0.02)
+        exp.eval()
+        mu, var = exp.predict(X_query)
+    """
+
+    def __init__(self,
+                 X_train: torch.Tensor,   # (N, D_X)
+                 Y_train: torch.Tensor,   # (N, D_Y)
+                 kernel_name: str = HC.KERNEL,
+                 n_inducing: int = 200):
+        super().__init__()
+        assert X_train.ndim == 2 and Y_train.ndim == 2
+        assert X_train.shape[0] == Y_train.shape[0]
+
+        self.D_Y = Y_train.shape[1]
+        self.kernel_name = kernel_name
+        N = X_train.shape[0]
+        M = min(n_inducing, N)
+        self.n_inducing = M
+
+        # Store full training data (not registered as buffer — saved externally)
+        self._X_train = X_train.to(HC.DEVICE).to(HC.DTYPE)
+        self._Y_train = Y_train.to(HC.DEVICE).to(HC.DTYPE)
+
+        # Initialise inducing points via K-means (or subsample if N≤M)
+        Z = self._init_inducing(self._X_train, M)
+
+        self.models: nn.ModuleList = nn.ModuleList()
+        self.likes:  nn.ModuleList = nn.ModuleList()
+        for _ in range(self.D_Y):
+            lk = gpytorch.likelihoods.GaussianLikelihood().to(HC.DEVICE).to(HC.DTYPE)
+            m  = _SingleOutputSVGP(Z.clone(), kernel_name=kernel_name
+                                   ).to(HC.DEVICE).to(HC.DTYPE)
+            self.models.append(m)
+            self.likes.append(lk)
+
+    @staticmethod
+    def _init_inducing(X: torch.Tensor, M: int) -> torch.Tensor:
+        """K-means initialisation of inducing points on CPU, returned on X.device."""
+        N = X.shape[0]
+        if M >= N:
+            return X.clone()
+        try:
+            from sklearn.cluster import KMeans
+            km = KMeans(n_clusters=M, n_init=5, random_state=42, max_iter=100)
+            km.fit(X.detach().cpu().numpy())
+            Z = torch.tensor(km.cluster_centers_, dtype=X.dtype, device=X.device)
+        except Exception:
+            # Fallback: random subsample
+            idx = torch.randperm(N, device=X.device)[:M]
+            Z = X[idx].clone()
+        return Z
+
+    # ── Training data attachment (mirrors ExactExpert API) ──────────────────
+    def set_train_data(self, X: torch.Tensor, Y: torch.Tensor):
+        """Attach / replace training data. Does NOT reinitialise inducing pts."""
+        self._X_train = X.to(HC.DEVICE).to(HC.DTYPE)
+        self._Y_train = Y.to(HC.DEVICE).to(HC.DTYPE)
+
+    # ── ELBO training ────────────────────────────────────────────────────────
+    def fit(self,
+            n_iters:    int   = 400,
+            lr:         float = 0.02,
+            batch_size: int   = 256,
+            tol:        float = HC.EXPERT_EARLY_STOP_TOL,
+            verbose:    bool  = False) -> float:
+        """Train D_Y SVGPs via VariationalELBO + Adam with mini-batching.
+
+        Returns final mean neg-ELBO per output (comparable in sign to
+        ExactExpert's neg-MLL so callers can log it uniformly).
+        """
+        N = self._X_train.shape[0]
+        bs = min(batch_size, N)
+
+        params: List[torch.nn.Parameter] = []
+        mlls: List[gpytorch.mlls.VariationalELBO] = []
+        for j in range(self.D_Y):
+            self.models[j].train()
+            self.likes[j].train()
+            params += list(self.models[j].parameters())
+            params += list(self.likes[j].parameters())
+            mlls.append(gpytorch.mlls.VariationalELBO(
+                self.likes[j], self.models[j], num_data=N))
+
+        opt = torch.optim.Adam(params, lr=lr)
+
+        last = float("inf")
+        plateau = 0
+        final_loss = float("nan")
+        perm = torch.randperm(N, device=HC.DEVICE)
+        ptr = 0
+
+        for it in range(n_iters):
+            # Cyclic mini-batch (reshuffle when exhausted)
+            if ptr + bs > N:
+                perm = torch.randperm(N, device=HC.DEVICE)
+                ptr = 0
+            idx = perm[ptr: ptr + bs]
+            ptr += bs
+            Xb = self._X_train[idx]
+            Yb = self._Y_train[idx]
+
+            opt.zero_grad()
+            loss = torch.zeros((), dtype=HC.DTYPE, device=HC.DEVICE)
+            for j in range(self.D_Y):
+                out  = self.models[j](Xb)
+                loss = loss - mlls[j](out, Yb[:, j])
+            loss.backward()
+            opt.step()
+
+            cur = float(loss.detach()) / self.D_Y
+            if verbose and (it % 50 == 0 or it == n_iters - 1):
+                print(f"      iter {it:4d}  neg_elbo_mean={cur:.4f}")
+            if abs(last - cur) < tol:
+                plateau += 1
+                if plateau >= 15:
+                    final_loss = cur
+                    break
+            else:
+                plateau = 0
+            last = cur
+            final_loss = cur
+        return final_loss
+
+    # ── Prediction (same interface as ExactExpert) ───────────────────────────
+    def predict(self, X: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Returns (mean, variance) each of shape (B, D_Y)."""
+        X = X.to(HC.DEVICE).to(HC.DTYPE)
+        means, variances = [], []
+        with gpytorch.settings.fast_pred_var():
+            for j in range(self.D_Y):
+                self.models[j].eval()
+                self.likes[j].eval()
+                p = self.likes[j](self.models[j](X))
+                means.append(p.mean)
+                variances.append(p.variance)
+        return torch.stack(means, dim=-1), torch.stack(variances, dim=-1)
+
+    # ── Stubs for API compatibility with ExactExpert ─────────────────────────
+    def clear_prediction_cache(self):
+        pass  # ApproximateGP has no persistent Cholesky cache
+
+    @torch.no_grad()
+    def prior_variance(self) -> torch.Tensor:
+        vs = []
+        for j in range(self.D_Y):
+            os = self.models[j].covar_module.outputscale
+            ns = self.likes[j].noise
             vs.append(os + ns)
         return torch.stack(vs).reshape(-1)

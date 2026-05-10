@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import pickle
@@ -22,6 +23,18 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / "pipeline_v6_1"))
 
+
+def _install_legacy_surrogate_aliases() -> None:
+    """Allow old pickles that reference vi_mogp.* to load via surrogate.*."""
+    import surrogate
+
+    sys.modules.setdefault("vi_mogp", surrogate)
+    for name in ("config", "data", "experts", "gp_base", "grid_geo", "model", "predict"):
+        sys.modules.setdefault(f"vi_mogp.{name}", importlib.import_module(f"surrogate.{name}"))
+
+
+_install_legacy_surrogate_aliases()
+
 import surrogate.grid_geo  # noqa: F401
 from surrogate import config as HC
 from surrogate.data import InputScaler, OutputScaler
@@ -38,8 +51,8 @@ PARAM_BOUNDS = {
 
 
 SIM_VS_REAL_CSV = REPO / "tests" / "sim_vs_real_results" / "sim_vs_real.csv"
-DEFAULT_STATE_ROOT = PIPELINE_ROOT / "Models" / "v10_yshape_v3p2_round2partial"
-STATE_ROOT = Path(os.environ.get("V10_STATE_ROOT", DEFAULT_STATE_ROOT))
+DEFAULT_STATE_ROOT = PIPELINE_ROOT / "Models" / "yshape_mogp_production"
+STATE_ROOT = Path(os.environ.get("MOGP_STATE_ROOT", DEFAULT_STATE_ROOT))
 V7_GEO_PARTITION = REPO / "Models" / "v7_bgm_refit_clean" / "partition_v7_bgm_refit.pkl"
 V6_MODEL = REPO / "Models" / "v6_1" / "model.pt"
 
@@ -716,7 +729,7 @@ def plot_flowcurves(real_rows: list[dict], sim_rows: list[dict], out_dir: Path):
         ax.set_ylim(1e0, 1e3 if family == "Sweet" else 1e2)
         ax.plot(df["[1/s]"], df["[Pa]"], linestyle="dotted", linewidth=3.0, color="black", label="rheometer")
         x = np.linspace(df["[1/s]"][5], df["[1/s]"][18], 10000)
-        for i, (label, r) in enumerate([("V10 real obs", real_r), ("V10 sim obs", sim_r)]):
+        for i, (label, r) in enumerate([("production real obs", real_r), ("production sim obs", sim_r)]):
             p = Param(r["theta_eta"], r["theta_n"], r["theta_sy"])
             ax.plot(x, calcFlowCurve(p, x), color=color_list[i % len(color_list)], linewidth=3.0, label=f"{label} fc={r['fc_pct']:.1f}%")
         ax.set_xlabel(r"$\dot{\gamma}[s^{-1}]$")
@@ -769,7 +782,7 @@ def plot_standard_single_double(rows_single: list[dict], rows_double: list[dict]
         p2 = Param(double_row["theta_eta"], double_row["theta_n"], double_row["theta_sy"])
         ax.plot(x, calcFlowCurve(p2, x), color="#8b0000", linewidth=3.2, label=f"double: {double_row['fc_pct']:.1f}%")
 
-        ax.set_title(f"{family} V10 {obs_source}")
+        ax.set_title(f"{family} production {obs_source}")
         ax.set_xlabel(r"$\dot{\gamma}[s^{-1}]$")
         ax.set_ylabel(r"$\sigma_s[Pa]$")
         ax.grid()
@@ -788,7 +801,7 @@ def main():
     ap.add_argument("--also-sim", action="store_true", help="Also run sim_mpm and plot real-vs-sim double flowcurves.")
     ap.add_argument("--out-dir", type=Path, default=REPO / "Models" / "v10_codex_pipeline")
     ap.add_argument("--state-root", type=Path, default=STATE_ROOT,
-                    help="trained V10 state root containing state_gid_*/state.pkl")
+                    help="trained MoGP state root containing state_gid_*/state.pkl")
     ap.add_argument("--families", default="all",
                     help="comma-separated material families or 'all' (default: all)")
     ap.add_argument("--loss-mode", choices=["linear", "log_nuisance"], default="log_nuisance")
