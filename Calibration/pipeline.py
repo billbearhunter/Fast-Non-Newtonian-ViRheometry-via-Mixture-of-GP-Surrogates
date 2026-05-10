@@ -312,7 +312,8 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
                           safety_rot_deg=3.0, safety_t_cm=3.0,
                           left_weight=1.0, left_frac=0.5,
                           top_weight=1.0, top_frac=0.5,
-                          bottom_weight=1.0, bottom_frac=0.5):
+                          bottom_weight=1.0, bottom_frac=0.5,
+                          search_rot_deg=2.5, search_t_cm=2.0):
     """
     Stage 2 — Refine camera extrinsic (R, t) by minimising chamfer distance
     between RENDERED cube edges and DETECTED container edges in config_00,
@@ -457,8 +458,8 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
     x0 = np.concatenate([rvec0, t_init.flatten()])
     cost_before = chamfer_cost(x0)
 
-    rot_margin = np.radians(2.5)
-    t_margin   = 0.02   # metres (2 cm)
+    rot_margin = np.radians(search_rot_deg)
+    t_margin   = search_t_cm / 100.0   # cm -> metres
     lb = np.concatenate([rvec0 - rot_margin, t_init.flatten() - t_margin])
     ub = np.concatenate([rvec0 + rot_margin, t_init.flatten() + t_margin])
 
@@ -487,6 +488,10 @@ def refine_extrinsic_edge(target_gray, K, R_init, t_init,
         w_map = None
 
     def neg_iou(params):
+        # Penalize anything outside the Phase-1 search box so Nelder-Mead
+        # can't drift past the user-set search_rot_deg / search_t_cm bounds.
+        if np.any(params < lb) or np.any(params > ub):
+            return 1.0
         rvec = params[:3]
         tvec = params[3:6]
         R_mat = Rot.from_rotvec(rvec).as_matrix()

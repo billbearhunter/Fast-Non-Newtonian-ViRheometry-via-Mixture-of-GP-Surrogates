@@ -85,6 +85,24 @@ def main():
     p.add_argument("--bottom_frac", type=float, default=0.5,
                    help="Fraction of target bbox height (measured from the "
                         "bottom) that counts as 'bottom' (default: 0.5)")
+    p.add_argument("--force-refined", action="store_true",
+                   help="Accept the refined extrinsic even when the global "
+                        "(unweighted) IoU drops below ChArUco. Use when "
+                        "ChArUco itself is tilted and you trust the weighted "
+                        "edge alignment. Safety clamp still applies.")
+    p.add_argument("--start-from-xml", action="store_true",
+                   help="Use the existing camera_params.xml in <configs_dir> "
+                        "as the prior (skip ChArUco re-fit). Use after manual "
+                        "tweaks: optimizer continues from the hand-aligned "
+                        "state and refines further.")
+    p.add_argument("--search-rot-deg", type=float, default=2.5,
+                   help="Phase-1/2 optimizer search range in rotation (deg). "
+                        "Default 2.5. Lower (e.g. 0.5) keeps the refined R "
+                        "close to the prior — useful when the optimizer's "
+                        "global minimum is in a visually wrong basin.")
+    p.add_argument("--search-t-cm", type=float, default=2.0,
+                   help="Phase-1/2 optimizer search range in translation (cm). "
+                        "Default 2.0.")
     args = p.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -135,14 +153,40 @@ def main():
     fw_m = args.fluid_w / 100.0
     fh_m = args.fluid_h / 100.0
 
-    # ── Step 4a: ChArUco prior ──────────────────────────────────────
-    print("\n[calib] Step 4a: ChArUco on background image")
-    theta0, img_W, img_H = calibrate(bg_img_path, fw_m, fh_m)
-    K_init = _theta_to_K(theta0, img_W, img_H)
-    eye, C_x, C_y, C_z, _s = _camera_axes(theta0)
-    R_init = np.vstack([C_x, -C_y, -C_z])
-    t_init = -R_init @ eye
-    print(f"[calib] ChArUco eye={eye}, |t|={np.linalg.norm(t_init):.3f}")
+    # ── Step 4a: prior — ChArUco re-fit OR existing camera_params.xml ──
+    if args.start_from_xml:
+        from scipy.spatial.transform import Rotation as _R
+        import xml.etree.ElementTree as _ET
+        xml_path = cfg_dir / "camera_params.xml"
+        if not xml_path.is_file():
+            sys.exit(f"[ERROR] {xml_path} not found — "
+                     f"--start-from-xml needs an existing camera_params.xml")
+        cam = _ET.parse(xml_path).getroot().find("camera")
+        eye_cm = np.array([float(v) for v in cam.attrib["eyepos"].split()])
+        qw, qx, qy, qz = [float(v) for v in cam.attrib["quat"].split()]
+        fov_deg = float(cam.attrib["fov"])
+        # Inverse of save_xml: q -> rot_our, then R_mat = [C_x; -C_y; -C_z]
+        rot_our = _R.from_quat([qx, qy, qz, qw]).as_matrix()
+        R_init = np.vstack([rot_our[:, 0], -rot_our[:, 1], -rot_our[:, 2]])
+        eye = eye_cm / 100.0
+        t_init = -R_init @ eye
+        # Image size from target (config_00); focal length from fov
+        img_W, img_H = tgt_W, tgt_H
+        f = img_H / (2.0 * np.tan(np.deg2rad(fov_deg) / 2.0))
+        K_init = np.array([[f, 0, img_W/2.0],
+                           [0, f, img_H/2.0],
+                           [0, 0, 1.0]])
+        print(f"\n[calib] Step 4a: prior from existing camera_params.xml "
+              f"(skipping ChArUco)")
+        print(f"[calib] eye={eye_cm} cm, fov={fov_deg:.3f}°")
+    else:
+        print("\n[calib] Step 4a: ChArUco on background image")
+        theta0, img_W, img_H = calibrate(bg_img_path, fw_m, fh_m)
+        K_init = _theta_to_K(theta0, img_W, img_H)
+        eye, C_x, C_y, C_z, _s = _camera_axes(theta0)
+        R_init = np.vstack([C_x, -C_y, -C_z])
+        t_init = -R_init @ eye
+        print(f"[calib] ChArUco eye={eye}, |t|={np.linalg.norm(t_init):.3f}")
 
     # ── Step 4b: edge refinement ────────────────────────────────────
     print(f"\n[calib] Step 4b: edge refinement "
@@ -158,6 +202,8 @@ def main():
         top_frac=args.top_frac,
         bottom_weight=args.bottom_weight,
         bottom_frac=args.bottom_frac,
+        search_rot_deg=args.search_rot_deg,
+        search_t_cm=args.search_t_cm,
     )
     if result is None:
         sys.exit("[ERROR] refine_extrinsic_edge failed")
@@ -191,7 +237,7 @@ def main():
     if safety_clamped:
         print("[calib] pipeline safety clamp fired — keeping ChArUco")
         K, R_mat, t = K_init, R_init, t_init
-    elif iou_refined >= iou_charuco:
+    elif args.force_refined or iou_refined >= iou_charuco:
         K, R_mat, t = K_init, R_ref, t_ref
         # Compute drift info
         eye_bg  = -R_init.T @ t_init
