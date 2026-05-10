@@ -1,0 +1,51 @@
+{
+  "material": "SweetBeanPaste",
+  "setup_1": {
+    "H": 4.1,
+    "W": 4.8,
+    "name": "ref_SweetBeanPaste_4.1_4.8_1"
+  },
+  "theta_hat": {
+    "n": 0.5980485800111234,
+    "eta": 122.01431624584545,
+    "sigma_y": 379.7655655121123
+  },
+  "objective": -1.5812387170220386,
+  "opt_s": 2.372802972793579,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 2.0,
+    "name": "ref_SweetBeanPaste_2.0_2.0_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_SweetBeanPaste_2.0_2.0_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_SweetBeanPaste_2.0_2.0_2\\settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      12.750374603610153,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      178.63214997241653,
+      807.3680172970232
+    ]
+  },
+  "z_std": [
+    0.8294529920186663,
+    1.1523355776928597,
+    0.38480891132146133
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.00047554361597623593,
+    0.0005297707334144526,
+    0.00036769479146410097
+  ]
+}

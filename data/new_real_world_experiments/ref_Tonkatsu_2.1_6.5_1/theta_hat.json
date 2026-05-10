@@ -1,0 +1,51 @@
+{
+  "material": "Tonkatsu",
+  "setup_1": {
+    "H": 2.1,
+    "W": 6.5,
+    "name": "ref_Tonkatsu_2.1_6.5_1"
+  },
+  "theta_hat": {
+    "n": 0.32910595483277605,
+    "eta": 76.23555111003857,
+    "sigma_y": 15.311948633058746
+  },
+  "objective": -1.5837188748570399,
+  "opt_s": 2.6289288997650146,
+  "proposed_setup_2": {
+    "H": 7.0,
+    "W": 7.0,
+    "name": "ref_Tonkatsu_7.0_7.0_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Tonkatsu_7.0_7.0_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_Tonkatsu_7.0_7.0_2\\settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      0.7247260031160536
+    ],
+    "eta": [
+      49.675113010006186,
+      116.99740374784058
+    ],
+    "sigma_y": [
+      1.9164175186433061,
+      122.34065315130721
+    ]
+  },
+  "z_std": [
+    0.20184696340983546,
+    0.21853257166819343,
+    1.0602938329597202
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.0001026746065606577,
+    0.0003631498015044753,
+    0.0011815391251463721
+  ]
+}
