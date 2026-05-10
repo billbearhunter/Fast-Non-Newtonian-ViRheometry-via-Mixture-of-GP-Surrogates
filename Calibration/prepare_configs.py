@@ -1142,18 +1142,17 @@ def binarize_frame(
     roi_mask: np.ndarray,
     v_thresh: int = V_THRESH,
     dilate_px: int = 0,
+    invert: bool = False,
 ) -> np.ndarray:
     """
-    Binarize a single frame: dark pixels inside ROI → black, everything else → white.
+    Binarize a single frame: fluid pixels inside ROI → black, everything else → white.
 
-    Simple approach:
-      1. Convert to HSV
-      2. Pixels with V < v_thresh AND inside roi_mask → foreground (black)
-      3. Reject skin-coloured pixels (hand)
-      4. Morphological cleanup
-      5. Everything outside roi_mask → white
+    Default (dark fluid on bright ground): V < v_thresh = foreground.
+    invert=True (bright fluid on dark ground): V > v_thresh = foreground;
+      paper-bright suppression and skin suppression are skipped because
+      they would remove the foreground itself.
 
-    Returns: uint8 image (255=white background, 0=black foreground).
+    Output PNG convention is unchanged: 255 = background, 0 = foreground.
     """
     h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -1161,20 +1160,25 @@ def binarize_frame(
     k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     k7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 
-    # Skin rejection mask (hand)
-    skin = cv2.inRange(hsv, SKIN_LO, SKIN_HI)
-    not_skin = cv2.bitwise_not(skin)
+    if invert:
+        # Bright fluid: V > v_thresh, restricted to ROI. No skin/paper masks.
+        dark = (hsv[:, :, 2] > v_thresh).astype(np.uint8) * 255
+        dark = cv2.bitwise_and(dark, roi_mask)
+    else:
+        # Skin rejection mask (hand)
+        skin = cv2.inRange(hsv, SKIN_LO, SKIN_HI)
+        not_skin = cv2.bitwise_not(skin)
 
-    # Identify white paper surface (these pixels are NEVER foreground,
-    # even if they are inside the ROI). Paper is bright and low-saturation.
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    paper_bright = (gray > 200).astype(np.uint8) * 255
+        # Identify white paper surface (these pixels are NEVER foreground,
+        # even if they are inside the ROI). Paper is bright and low-saturation.
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        paper_bright = (gray > 200).astype(np.uint8) * 255
 
-    # Dark pixels inside ROI, excluding paper surface
-    dark = (hsv[:, :, 2] < v_thresh).astype(np.uint8) * 255
-    dark = cv2.bitwise_and(dark, roi_mask)
-    dark = cv2.bitwise_and(dark, not_skin)
-    dark = cv2.bitwise_and(dark, cv2.bitwise_not(paper_bright))
+        # Dark pixels inside ROI, excluding paper surface
+        dark = (hsv[:, :, 2] < v_thresh).astype(np.uint8) * 255
+        dark = cv2.bitwise_and(dark, roi_mask)
+        dark = cv2.bitwise_and(dark, not_skin)
+        dark = cv2.bitwise_and(dark, cv2.bitwise_not(paper_bright))
 
     # Morphological cleanup (light close to bridge small gaps,
     # but not so aggressive that it connects the container to
@@ -1301,6 +1305,10 @@ def parse_args() -> argparse.Namespace:
                         "morphological cleanup (clipped to ROI). Useful "
                         "when V-thresh can't reach the glass-reflection rim "
                         "around the fluid. Default: 0 (disabled).")
+    p.add_argument("--invert", action="store_true",
+                   help="Invert binarization for bright fluid on dark "
+                        "ground (V > v_thresh = foreground). Skips skin / "
+                        "paper-bright suppression.")
 
     # Output options
     p.add_argument("--save-debug", action="store_true",
@@ -1630,12 +1638,14 @@ def main() -> None:
 
     # ── Step 4: Process each frame (binarize + save config_XX.png) ───────
     dilate_note = f", dilate={args.dilate}px" if args.dilate > 0 else ""
-    print(f"\n[process] Binarizing {args.n_configs} frames (V < {args.v_thresh}{dilate_note})...")
+    cmp_note = ">" if args.invert else "<"
+    print(f"\n[process] Binarizing {args.n_configs} frames (V {cmp_note} {args.v_thresh}{dilate_note})...")
     for config_idx, frame_idx in enumerate(frame_indices):
         frame = read_frame(cap, frame_idx)
         binary = binarize_frame(frame, roi_mask,
                                 v_thresh=args.v_thresh,
-                                dilate_px=args.dilate)
+                                dilate_px=args.dilate,
+                                invert=args.invert)
 
         out_path = out_dir / f"config_{config_idx:02d}.png"
         _imwrite_with_icc(str(out_path), binary, icc_profile)
