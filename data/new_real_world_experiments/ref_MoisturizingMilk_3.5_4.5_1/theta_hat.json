@@ -1,0 +1,51 @@
+{
+  "material": "MoisturizingMilk",
+  "setup_1": {
+    "H": 3.5,
+    "W": 4.5,
+    "name": "ref_MoisturizingMilk_3.5_4.5_1"
+  },
+  "theta_hat": {
+    "n": 0.41704275420925074,
+    "eta": 28.645090528111247,
+    "sigma_y": 157.89099327712225
+  },
+  "objective": -1.5568447065730202,
+  "opt_s": 2.7087104320526123,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 4.5,
+    "name": "ref_MoisturizingMilk_2.0_4.5_2",
+    "dir": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_MoisturizingMilk_2.0_4.5_2",
+    "settings_xml": "C:\\Users\\xiong\\Documents\\GitHub\\Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates\\data\\new_real_world_experiments\\ref_MoisturizingMilk_2.0_4.5_2\\settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      0.060540174366611785,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      24.3181601908339,
+      1025.1419335346275
+    ]
+  },
+  "z_std": [
+    1.763326568995183,
+    3.142566409900899,
+    0.9544293238619576
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.00036772293829439424,
+    0.00028697564741551196,
+    7.604717668884663e-05
+  ]
+}
