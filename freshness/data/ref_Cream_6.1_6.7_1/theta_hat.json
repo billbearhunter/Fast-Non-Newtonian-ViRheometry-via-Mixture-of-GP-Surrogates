@@ -1,0 +1,51 @@
+{
+  "material": "Cream",
+  "setup_1": {
+    "H": 6.1,
+    "W": 6.7,
+    "name": "ref_Cream_6.1_6.7_1"
+  },
+  "theta_hat": {
+    "n": 0.392322091578829,
+    "eta": 144.2374960304498,
+    "sigma_y": 140.07259883323235
+  },
+  "objective": -1.0766255148197539,
+  "opt_s": 10.477805137634277,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 6.0,
+    "name": "ref_Cream_2.0_6.0_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Cream_2.0_6.0_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Cream_2.0_6.0_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      6.607753478500256,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      46.76671702455238,
+      419.5362469765632
+    ]
+  },
+  "z_std": [
+    0.6144526080402062,
+    1.573070147958899,
+    0.5596883041155992
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.004284851644998459,
+    0.021045933110867207,
+    0.0048114347355822425
+  ]
+}

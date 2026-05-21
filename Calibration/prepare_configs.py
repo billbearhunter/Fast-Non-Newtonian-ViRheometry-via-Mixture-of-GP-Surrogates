@@ -450,6 +450,7 @@ def pick_roi_polygon(
     frame_step: int = 10,
     window_name: str = "Draw ROI (container + puddle)",
     show_scrubber: bool = True,
+    cube_edges_px: Optional[list] = None,
 ) -> np.ndarray:
     """
     Open a window showing a video frame. User draws a polygon around the
@@ -537,6 +538,12 @@ def pick_roi_polygon(
             last_drawn = current_idx
 
         canvas = frame.copy()
+        # Cube wireframe overlay (from ChArUco prior) — drawn first so the
+        # polygon vertices/lines on top of it stay visible.
+        if cube_edges_px:
+            for p0, p1 in cube_edges_px:
+                cv2.line(canvas, tuple(p0), tuple(p1), (255, 255, 0), 2,
+                         cv2.LINE_AA)
         for i, pt in enumerate(points):
             cv2.circle(canvas, pt, 6, (0, 255, 0), -1)
             cv2.putText(canvas, str(i), (pt[0] + 10, pt[1] - 10),
@@ -1616,6 +1623,54 @@ def main() -> None:
                         print(f"[left-face] Saved → {left_face_save}")
 
     # ── Step 3: ROI polygon (for binarization of cfg_00~08) ──────────────
+    # Pre-compute cube wireframe (from ChArUco prior on bg image) to overlay
+    # in the ROI picker as a visual aid for where the container/initial fluid
+    # *should* sit. Best-effort: skip silently on any failure.
+    cube_edges_for_roi: Optional[list] = None
+    if args.roi_poly is None and args.bg_img and os.path.isfile(args.bg_img):
+        try:
+            from_settings_for_roi = (
+                _parse_settings_xml(args.settings_xml)
+                if args.settings_xml and os.path.isfile(args.settings_xml)
+                else {}
+            )
+            fw_cm_roi = args.fluid_w if args.fluid_w is not None \
+                else from_settings_for_roi.get("W")
+            fh_cm_roi = args.fluid_h if args.fluid_h is not None \
+                else from_settings_for_roi.get("H")
+            if fw_cm_roi and fh_cm_roi:
+                _calib_dir = os.path.dirname(os.path.abspath(__file__))
+                if _calib_dir not in sys.path:
+                    sys.path.insert(0, _calib_dir)
+                from pipeline import (
+                    calibrate as _calib_charuco,
+                    _theta_to_K, _camera_axes,
+                    _cube_verts, _CUBE_FACES, _FACE_NORMALS, _project_KRt,
+                )
+                print("\n[ROI overlay] Running ChArUco prior for cube wireframe…")
+                _theta, _imgW, _imgH = _calib_charuco(
+                    args.bg_img, fw_cm_roi/100.0, fh_cm_roi/100.0)
+                _K = _theta_to_K(_theta, _imgW, _imgH)
+                _eye, _Cx, _Cy, _Cz, _ = _camera_axes(_theta)
+                _R = np.vstack([_Cx, -_Cy, -_Cz])
+                _t = -_R @ _eye
+                _verts = _cube_verts(fw_cm_roi/100.0, fh_cm_roi/100.0)
+                _pv = _project_KRt(_verts, _K, _R, _t)
+                cube_edges_for_roi = []
+                for fi, face in enumerate(_CUBE_FACES):
+                    center = _verts[face].mean(axis=0)
+                    if _FACE_NORMALS[fi] @ (_eye - center) > 0:
+                        corners = _pv[face].astype(int)
+                        for j in range(len(corners)):
+                            p0 = corners[j]
+                            p1 = corners[(j + 1) % len(corners)]
+                            cube_edges_for_roi.append((p0, p1))
+                print(f"[ROI overlay] {len(cube_edges_for_roi)} cube edges ready "
+                      f"(yellow wireframe in ROI GUI)")
+        except Exception as _e:
+            print(f"[ROI overlay] skipped ({_e})")
+            cube_edges_for_roi = None
+
     if args.roi_poly is not None:
         poly = np.load(args.roi_poly)
         print(f"[ROI] Polygon loaded from {args.roi_poly} ({len(poly)} verts)")
@@ -1628,6 +1683,7 @@ def main() -> None:
         poly = pick_roi_polygon(
             cap, last_frame_idx, frame_step=10,
             window_name="ROI - container + max puddle extent",
+            cube_edges_px=cube_edges_for_roi,
         )
         if poly.size == 0:
             print("[ROI] Cancelled. Exiting.")

@@ -33,8 +33,11 @@ A 类** —"啥时候停" 高度主观, σ_y_∞ 跨 batch 散布 3-5× (vs 终�
 | **3** | **半 whipped 生クリーム** | 生クリーム 200 mL + 砂糖 20 g, whip **30 s only** (soft peak) | 15-60 min foam decay | 30-150 Pa | whip 秒数 (15/30/60 s) | 0.7-0.8 | ✓ mild | ⭐⭐⭐ 中高 |
 | **4** | **partial 卵黄 emulsion** | 卵黄 2 + 油 50 mL only (不到 full mayo), hand-mix 30 s | 20-60 min separation | 10-100 Pa | mix 秒数 + 油加入量 | 0.98 | × | ⭐⭐⭐ 中高 |
 | **5** | **打蛋白 no sugar** | 蛋白 2 個 only, whip 30/60/120 s (无糖, fast decay) | **5-30 min** ⚡ | 30-250 Pa | whip 秒数 | 0.3-0.7 | ✓ 较强 | ⭐⭐⭐⭐ 高 |
+| **6 (备用)** | **速食燕麦 partial soaked** | 即时オートミール 40 g + 熱水 (70 °C) 300 mL, soak X min (X=1/3/5), stir 5 s | 15-45 min cooling + 吸水 | 50-250 Pa | 水温 + soak 秒数 + stir 强度 | 1.00-1.05 | × | ⭐⭐ 中 |
 
 **鸡蛋 economy**: 材料 2 用全卵; 材料 4 用 yolk; **材料 5 用 white (= 材料 4 副产)** → 4 個鸡蛋 cover 三个材料。
+
+**材料 6 用途**: 备用 fallback —— 当材料 3/4/5 当天失败 (生クリーム spoiled / 蛋白 whip 不起 / mayo 油水分离) 时顶替。Pantry-only, 无保质期 / 鸡蛋 / 乳制品依赖, 失败也几乎不可能。也可作为第 2 个淀粉系对照 (vs 材料 1 片栗粉) 提供 starch-source 散布证据。注意颗粒不均, **aliquot 取样前必搅 10 s**。
 
 ---
 
@@ -125,9 +128,69 @@ hold-out residual @ setup 3 (3.0, 6.0):
 11:00—12:00 半 whipped 生クリーム      (cream, whip 30 s)
 12:00—13:00 partial 卵黄 emulsion      (yolk + 油 mix 30 s) ← 副产 2 個 whites
 13:00—14:00 打蛋白 no sugar            (whites from above, whip 30/60/120 s)
+                                     ↑ 若失败, 14:00 顶上速食燕麦 (备用)
 
 14:00—15:00 GPU joint inverse (~30 s 总), ρ-rescale 分析, hold-out forward
 ```
+
+材料 6 (速食燕麦) 不挤进默认 routine — 设计为"任一材料失败时的 1-hour drop-in 顶替", pantry-only 即开即做, 不消耗其他材料。
+
+---
+
+## 备用材料 — 速食燕麦 partial soaked (1-hour walkthrough)
+
+### 准备 (5 min)
+
+```
+T-5    setup 1 (4.0, 5.5), setup 3 (3.0, 6.0) ← 与材料 1 同套, 但模具池 reshuffle
+       食材: 即时オートミール 40 g, 熱水 70 °C 300 mL (kettle 烧 + 5 min 自然降温)
+T-3    模具洗净干燥, camera ready, batch_metadata.json template
+```
+
+### Batch prep (5 min)
+
+```
+T0      kettle 沸水, 量 300 mL → 静置降温到 ~70 °C (~3 min)
+T0+3    倒入 40 g 即时燕麦, stir 5 s (避免结团)
+        → soak X min: 选 1/3/5 min 中一档 (本 session 锁定一档, e.g. X=3)
+T0+3+X  stir 5 s, 倒入容器, 量 50 mL → 称 → ρ_real ≈ 1.00-1.05
+        t_0 written to batch_metadata.json (ISO time)
+```
+
+### Capture t_a = T0+10 (15 min) — 同 §"片栗粉糊 1-hour walkthrough" 一样跑
+
+```
+T0+10   aliquot 250 mL **先搅 10 s 防颗粒沉降** → setup 1 → release → 录像
+T0+10-15 video extract → y_obs_1_a
+T0+15   setup-1-alone inverse → θ̂_1_a; propose → setup 2_a
+T0+15   aliquot (搅 10 s) → setup 2 → release → extract → y_obs_2_a
+T0+20   joint inverse → θ̂_joint_a
+T0+20   aliquot (搅 10 s) → setup 3 (hold-out) → release → y_obs_3_a
+```
+
+### 等待 + Capture t_b = T0+40 (15+15 min)
+
+同片栗粉糊流程; 第二点 setup 1/2/3 各拍一次, aliquot 取样前**必搅 10 s**。
+
+### 期待 output
+
+```
+σ_y(t_a ≈ 10 min) = 40-80 Pa   (热水刚 soak, 浆水状)
+σ_y(t_b ≈ 40 min) = 100-200 Pa (cooling + 持续吸水, 稠化)
+freshness rate = +2 ~ +4 Pa/min (正方向, 类似 partial gelatinize)
+
+hold-out residual @ setup 3:
+  t_a: 15-25 % median, < 30 % p90  (颗粒导致 y_obs noise 略高)
+  t_b: 同上
+```
+
+### 注意事项
+
+- **颗粒**: 速食燕麦含全粒, aliquot 中颗粒分布不均, **取样前必搅 10 s**, 否则 σ_y noise 大 (跨 aliquot CV 可到 30%)
+- **水温敏感**: 70 °C 是关键; 60 °C 太冷 starch 不糊化, 80 °C+ 直接全糊化失去 partial state. Kettle 沸水静置 3 min 实测约 70 °C
+- **A 类源**: 水温 ±5 °C / soak 1 vs 5 min / stir 5 s vs 30 s → σ_y_∞ 散布期待 30-50%
+- **保质期**: 干燕麦 ~6 月, 远比 生クリーム 5-7 日 robust → 一袋可 cover 多次 session
+
 
 ---
 

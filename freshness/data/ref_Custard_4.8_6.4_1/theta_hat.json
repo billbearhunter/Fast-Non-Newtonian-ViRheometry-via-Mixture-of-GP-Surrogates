@@ -1,0 +1,51 @@
+{
+  "material": "Custard",
+  "setup_1": {
+    "H": 4.8,
+    "W": 6.4,
+    "name": "ref_Custard_4.8_6.4_1"
+  },
+  "theta_hat": {
+    "n": 0.637305366312367,
+    "eta": 268.142054538622,
+    "sigma_y": 266.8958448351031
+  },
+  "objective": -1.4408586843565019,
+  "opt_s": 9.580623149871826,
+  "proposed_setup_2": {
+    "H": 2.5,
+    "W": 6.0,
+    "name": "ref_Custard_2.5_6.0_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Custard_2.5_6.0_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Custard_2.5_6.0_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.04085650746913527,
+      1.0
+    ],
+    "eta": [
+      124.01962215773531,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      141.61908484136188,
+      502.992884539801
+    ]
+  },
+  "z_std": [
+    0.304310642266955,
+    0.39340668267187257,
+    0.32332527342469664
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.017691762734240554,
+    0.015638677233732735,
+    0.006089710441073259
+  ]
+}

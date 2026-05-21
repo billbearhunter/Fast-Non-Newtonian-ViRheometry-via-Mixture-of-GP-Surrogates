@@ -1,0 +1,104 @@
+{
+  "dir": "freshness/data/ref_Oats_5.6_5.3_3/output",
+  "camera_xml": "freshness/data/ref_Oats_5.6_5.3_3/output/camera_params.xml",
+  "settings_xml": "freshness/data/ref_Oats_5.6_5.3_3/output/settings.xml",
+  "images": [
+    "config_01.png",
+    "config_02.png",
+    "config_03.png",
+    "config_04.png",
+    "config_05.png",
+    "config_06.png",
+    "config_07.png",
+    "config_08.png"
+  ],
+  "flow_direction_xz": [
+    1.0,
+    0.0
+  ],
+  "box_front_cm": 5.3,
+  "distances": [
+    0.47288614725085676,
+    1.1169258718580968,
+    1.691627763413444,
+    2.1164182037272057,
+    2.472618868854035,
+    2.7267766299286142,
+    2.927229326260005,
+    3.1258792667722837
+  ],
+  "rows": [
+    {
+      "frame_index": 1,
+      "image": "config_01.png",
+      "distance_cm": 0.47288614725085676,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 5.772886147250857,
+      "far_x_cm": 5.772886147250857,
+      "far_z_cm": -1.1143626970645637
+    },
+    {
+      "frame_index": 2,
+      "image": "config_02.png",
+      "distance_cm": 1.1169258718580968,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 6.416925871858097,
+      "far_x_cm": 6.416925871858097,
+      "far_z_cm": -0.14184191052774298
+    },
+    {
+      "frame_index": 3,
+      "image": "config_03.png",
+      "distance_cm": 1.691627763413444,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 6.991627763413444,
+      "far_x_cm": 6.991627763413444,
+      "far_z_cm": 0.38007359443025523
+    },
+    {
+      "frame_index": 4,
+      "image": "config_04.png",
+      "distance_cm": 2.1164182037272057,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 7.416418203727206,
+      "far_x_cm": 7.416418203727206,
+      "far_z_cm": 0.9202855287242628
+    },
+    {
+      "frame_index": 5,
+      "image": "config_05.png",
+      "distance_cm": 2.472618868854035,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 7.772618868854035,
+      "far_x_cm": 7.772618868854035,
+      "far_z_cm": 0.34776655411680735
+    },
+    {
+      "frame_index": 6,
+      "image": "config_06.png",
+      "distance_cm": 2.7267766299286142,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 8.026776629928614,
+      "far_x_cm": 8.026776629928614,
+      "far_z_cm": 0.6387755363469111
+    },
+    {
+      "frame_index": 7,
+      "image": "config_07.png",
+      "distance_cm": 2.927229326260005,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 8.227229326260005,
+      "far_x_cm": 8.227229326260005,
+      "far_z_cm": 0.7827124673048413
+    },
+    {
+      "frame_index": 8,
+      "image": "config_08.png",
+      "distance_cm": 3.1258792667722837,
+      "origin_projection_cm": 5.3,
+      "far_projection_cm": 8.425879266772283,
+      "far_x_cm": 8.425879266772283,
+      "far_z_cm": 0.9253549126079619
+    }
+  ]
+}

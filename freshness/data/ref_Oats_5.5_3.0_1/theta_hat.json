@@ -1,0 +1,51 @@
+{
+  "material": "Oats",
+  "setup_1": {
+    "H": 5.5,
+    "W": 3.0,
+    "name": "ref_Oats_5.5_3.0_1"
+  },
+  "theta_hat": {
+    "n": 0.5180736016342041,
+    "eta": 89.18023193357479,
+    "sigma_y": 157.99740793829042
+  },
+  "objective": -1.2024980795297733,
+  "opt_s": 7.708513021469116,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 3.0,
+    "name": "ref_Oats_2.0_3.0_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Oats_2.0_3.0_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Oats_2.0_3.0_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      47.54407717373101,
+      167.2787493311666
+    ],
+    "sigma_y": [
+      53.646770298027334,
+      465.3249538889108
+    ]
+  },
+  "z_std": [
+    0.8652128418844145,
+    0.3209194789090256,
+    0.551100693699735
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.03881798165209898,
+    0.005410205811173525,
+    0.024535063484040026
+  ]
+}

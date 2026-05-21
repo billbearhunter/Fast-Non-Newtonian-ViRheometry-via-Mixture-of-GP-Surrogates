@@ -107,13 +107,16 @@ class FileOperations:
         particleSkinnerApp = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'ParticleSkinner3DTaichi.py')
         _mc_dir = os.path.join(_sim_root, 'ParticleSkinner3DTaichi', 'cpp_marching_cubes', 'build')
         _mc_base = os.path.join(_mc_dir, 'cpp_marching_cubes')
-        # Auto-detect: Windows .exe -> macOS binary -> macOS-named binary
-        if os.path.isfile(_mc_base + '.exe'):
+        # Auto-detect by OS: prefer the binary matching this platform.
+        import sys as _sys
+        if _sys.platform == 'win32' and os.path.isfile(_mc_base + '.exe'):
             marching_cube_path = _mc_base + '.exe'
+        elif _sys.platform == 'darwin' and os.path.isfile(_mc_base + '_macos'):
+            marching_cube_path = _mc_base + '_macos'
         elif os.path.isfile(_mc_base):
             marching_cube_path = _mc_base
-        elif os.path.isfile(os.path.join(_mc_dir, 'cpp_marching_cubes_macos')):
-            marching_cube_path = os.path.join(_mc_dir, 'cpp_marching_cubes_macos')
+        elif os.path.isfile(_mc_base + '.exe'):
+            marching_cube_path = _mc_base + '.exe'  # last resort
         else:
             marching_cube_path = _mc_base
  

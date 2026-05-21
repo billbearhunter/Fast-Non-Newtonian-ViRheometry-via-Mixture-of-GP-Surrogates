@@ -1,0 +1,51 @@
+{
+  "material": "EggFoam",
+  "setup_1": {
+    "H": 2.3,
+    "W": 5.4,
+    "name": "ref_EggFoam_2.3_5.4_1"
+  },
+  "theta_hat": {
+    "n": 0.3895503189840437,
+    "eta": 10.714190227839474,
+    "sigma_y": 18.878148683016875
+  },
+  "objective": -0.6639210453892375,
+  "opt_s": 7.405757188796997,
+  "proposed_setup_2": {
+    "H": 7.0,
+    "W": 7.0,
+    "name": "ref_EggFoam_7.0_7.0_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_EggFoam_7.0_7.0_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_EggFoam_7.0_7.0_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      1.011569408265977,
+      113.48096462813113
+    ],
+    "sigma_y": [
+      4.192942468779887,
+      84.99627656512939
+    ]
+  },
+  "z_std": [
+    0.32131058782284183,
+    1.2041153356916792,
+    0.7676542609943209
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.10672995589649895,
+    0.9173517920864461,
+    0.02866258305972926
+  ]
+}

@@ -1,0 +1,51 @@
+{
+  "material": "YolkEmulsion",
+  "setup_1": {
+    "H": 2.3,
+    "W": 5.9,
+    "name": "ref_YolkEmulsion_2.3_5.9_1"
+  },
+  "theta_hat": {
+    "n": 0.7172002602976938,
+    "eta": 205.1289356961761,
+    "sigma_y": 185.53616045193885
+  },
+  "objective": -1.0580356605532817,
+  "opt_s": 9.171715021133423,
+  "proposed_setup_2": {
+    "H": 7.0,
+    "W": 7.0,
+    "name": "ref_YolkEmulsion_7.0_7.0_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_YolkEmulsion_7.0_7.0_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_YolkEmulsion_7.0_7.0_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      89.04172150387085,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      82.96438034764873,
+      414.9210382937934
+    ]
+  },
+  "z_std": [
+    0.6915923580449918,
+    0.4257824975580574,
+    0.41063185451767137
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.11561770072865246,
+    0.16414763551558054,
+    0.05379023186707709
+  ]
+}

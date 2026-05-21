@@ -33,3 +33,8 @@ gamma_dot_runs/**/*.bin
 gamma_dot_runs/**/*.dat
 gamma_dot_runs/**/timing.json
 gamma_dot_runs/**/meta.txt
+
+# Freshness pilot — large intermediate sim files (3+ GB)
+freshness/data/*/holdout_mpm/
+# Freshness pilot — raw videos (1 GB total, regenerable from IMG_*.JPG + IMG_*.mov sources)
+freshness/data/*/IMG_*.mov

@@ -1,0 +1,51 @@
+{
+  "material": "Katakuriko",
+  "setup_1": {
+    "H": 4.9,
+    "W": 3.3,
+    "name": "ref_Katakuriko_4.9_3.3_1"
+  },
+  "theta_hat": {
+    "n": 0.3682652592715433,
+    "eta": 163.45501474915957,
+    "sigma_y": 161.3825582616008
+  },
+  "objective": -1.3044565521895013,
+  "opt_s": 7.568817138671875,
+  "proposed_setup_2": {
+    "H": 2.0,
+    "W": 6.5,
+    "name": "ref_Katakuriko_2.0_6.5_2",
+    "dir": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Katakuriko_2.0_6.5_2",
+    "settings_xml": "/Users/cglab/Documents/GitHub/Fast-Non-Newtonian-ViRheometry-via-Mixture-of-GP-Surrogates/freshness/data/ref_Katakuriko_2.0_6.5_2/settings.xml"
+  },
+  "theta_ci_95": {
+    "n": [
+      0.0,
+      1.0
+    ],
+    "eta": [
+      41.215478391732724,
+      403.4287934927351
+    ],
+    "sigma_y": [
+      68.06027408558234,
+      382.66566599936925
+    ]
+  },
+  "z_std": [
+    0.46251150391607665,
+    0.7029203767392844,
+    0.4405020349597232
+  ],
+  "identifiable": {
+    "n": true,
+    "eta": true,
+    "sigma_y": true
+  },
+  "z_dispersion": [
+    0.008493545702668755,
+    0.0026839408370510983,
+    0.004467746503598727
+  ]
+}
